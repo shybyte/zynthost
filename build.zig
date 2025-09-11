@@ -84,6 +84,9 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    exe.linkSystemLibrary("lilv-0");
+    exe.linkSystemLibrary("portaudio");
+
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
     // step). By default the install prefix is `zig-out/` but can be overridden
@@ -124,6 +127,7 @@ pub fn build(b: *std.Build) void {
     // List of files containing tests
     const test_files = &[_][]const u8{
         "src/midi_sequence.zig",
+        "src/synth_plugin.zig",
         "src/main.zig",
         "src/root.zig",
     };
