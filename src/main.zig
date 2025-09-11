@@ -6,6 +6,9 @@ const pa = @cImport({
     @cInclude("portaudio.h");
 });
 
+const SynthPlugin = @import("synth_plugin.zig").SynthPlugin;
+const create_world = @import("synth_plugin.zig").create_world;
+
 const freq = 440.0; // A4 note
 const sample_rate = 44100;
 const volume: f32 = 0.1; // Set desired output volume (0.0 to 1.0)
@@ -13,6 +16,7 @@ const NumSeconds = 2;
 
 const State = struct {
     phase: f64 = 0.0,
+    synth_plugin: *SynthPlugin,
 };
 
 fn audioCallback(
@@ -26,28 +30,38 @@ fn audioCallback(
     _ = input;
     _ = timeInfo;
     _ = statusFlags;
+    // _ = frameCount;
 
     const data: *State = @ptrCast(@alignCast(userData.?));
     const out: [*]f32 = @ptrCast(@alignCast(output));
 
-    const increment = 2.0 * std.math.pi * freq / @as(f32, sample_rate);
+    data.synth_plugin.run();
 
-    var i: u32 = 0;
-    std.debug.print("framecount {}\n", .{frameCount});
-    while (i < frameCount) : (i += 1) {
-        out[i] = volume * @as(f32, @floatCast(std.math.sin(data.phase)));
-
-        data.phase += increment;
-        if (data.phase >= 2.0 * std.math.pi) {
-            data.phase -= 2.0 * std.math.pi;
-        }
+    for (0..frameCount) |i| {
+        const v = data.synth_plugin.audio_out_bufs[5].?[i];
+        // if (v != 0.0) {
+        //     std.debug.print(" {}\n", .{v});
+        // }
+        out[i] = v * 0.6;
     }
+
+    // const increment = 2.0 * std.math.pi * freq / @as(f32, sample_rate);
+    // var i: u32 = 0;
+    // // std.debug.print("framecount {}\n", .{frameCount});
+    // while (i < frameCount) : (i += 1) {
+    //     out[i] = volume * @as(f32, @floatCast(std.math.sin(data.phase)));
+
+    //     data.phase += increment;
+    //     if (data.phase >= 2.0 * std.math.pi) {
+    //         data.phase -= 2.0 * std.math.pi;
+    //     }
+    // }
 
     return pa.paContinue;
 }
 
-fn playSound() !void {
-    var state = State{};
+fn playSound(synth_plugin: *SynthPlugin) !void {
+    var state = State{ .synth_plugin = synth_plugin };
     const err = pa.Pa_Initialize();
     if (err != pa.paNoError) return errorFromPa(err);
     defer _ = pa.Pa_Terminate();
@@ -97,7 +111,19 @@ pub fn main() !void {
     // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
     std.debug.print("All your {s} are belong to us!\n", .{"codebase"});
 
-    try playSound();
+    const allocator = std.heap.page_allocator;
+
+    const world = create_world();
+    // defer c.lilv_world_free(world.?);
+
+    // c.lilv_world_load_all(world.?);
+
+    var synth_plugin = try SynthPlugin.init(allocator, world.?, "https://surge-synthesizer.github.io/lv2/surge-xt");
+    defer synth_plugin.deinit();
+
+    try playSound(synth_plugin);
+
+    std.debug.print(" {any}\n", .{synth_plugin.audio_out_bufs[5]});
 
     std.debug.print("Hello", .{});
 }

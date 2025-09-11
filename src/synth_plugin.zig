@@ -11,7 +11,7 @@ const c = @cImport({
 const MidiSequence = @import("midi_sequence.zig").MidiSequence;
 
 const sample_rate: f64 = 48000.0;
-const nframes: u32 = 256;
+const nframes: u32 = 383;
 
 pub const SynthPlugin = struct {
     const Self = @This();
@@ -22,6 +22,8 @@ pub const SynthPlugin = struct {
     audio_in_bufs: []?[]f32,
     audio_out_bufs: []?[]f32,
     control_in_vals: []f32,
+    backing: [1024]u8 align(8),
+    midi_sequence: MidiSequence,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -191,16 +193,17 @@ pub const SynthPlugin = struct {
         const midi_MidiEvent_urid = urid_map_func(null, "http://lv2plug.in/ns/ext/midi#MidiEvent");
         const midi_timeframe_urid = urid_map_func(null, "http://lv2plug.in/ns/ext/time#frame");
 
-        var backing: [1024]u8 align(8) = undefined;
-        var ms = MidiSequence.init(backing[0..], atom_Sequence_urid, midi_MidiEvent_urid, midi_timeframe_urid);
-        try ms.addEvent(0, &[_]u8{ 0x90, 60, 127 });
+        self.midi_sequence = MidiSequence.init(self.backing[0..], atom_Sequence_urid, midi_MidiEvent_urid, midi_timeframe_urid);
+        try self.midi_sequence.addEvent(0, &[_]u8{ 0x90, 60, 127 });
 
         // Connect the MIDI sequence to the discovered MIDI input port
-        c.lilv_instance_connect_port(self.instance, midi_in_port_index.?, ms.seq());
+        c.lilv_instance_connect_port(self.instance, midi_in_port_index.?, self.midi_sequence.seq());
     }
 
     pub fn run(self: *Self) void {
+        // _ = self;
         c.lilv_instance_run(self.instance, nframes);
+        // std.debug.print("Test {any}\n", .{self.instance});
     }
 
     pub fn deinit(self: *Self) void {
@@ -264,13 +267,22 @@ export fn urid_map_func(handle: ?*anyopaque, uri: ?[*:0]const u8) callconv(.c) c
     }
 }
 
+pub fn create_world() ?*c.LilvWorld {
+    const world = c.lilv_world_new();
+    errdefer c.lilv_world_free(world.?);
+
+    c.lilv_world_load_all(world.?);
+
+    return world;
+}
+
 // ---- Tests ----
 
 test "SynthPlugin initialization and deinitialization" {
     // Use the built-in testing allocator
     const allocator = std.testing.allocator;
 
-    const world = c.lilv_world_new();
+    const world = create_world();
     try std.testing.expect(world != null);
     defer c.lilv_world_free(world.?);
 
@@ -281,7 +293,9 @@ test "SynthPlugin initialization and deinitialization" {
     defer synth_plugin.deinit();
     defer deinitUridTable();
 
-    synth_plugin.run();
+    // synth_plugin.run();
+
+    try playSound2(synth_plugin);
 
     std.debug.print(" {any}\n", .{synth_plugin.audio_out_bufs[5]});
 
@@ -290,4 +304,11 @@ test "SynthPlugin initialization and deinitialization" {
 
     // (deinit will run via defer; no double free)
 
+}
+
+fn playSound2(synth_plugin: *SynthPlugin) !void {
+    var state2: [1048]u8 = undefined;
+    @memset(&state2, 0);
+    synth_plugin.run();
+    std.debug.print("state2 {any}\n", .{state2[0..10]});
 }
