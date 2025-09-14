@@ -252,7 +252,7 @@ pub const SynthPlugin = struct {
         defer c.suil_host_free(host);
 
         // ExternalUI needs the external-ui host feature so it can notify closure (optional but good)
-        var ext_host = LV2_External_UI_Host{ .ui_closed = null }; // set callback if you want
+        var ext_host = LV2_External_UI_Host{ .ui_closed = on_ui_closed }; // set callback if you want
         const ext_host_feat = c.LV2_Feature{
             .URI = "http://kxstudio.sf.net/ns/lv2ext/external-ui#Host",
             .data = &ext_host,
@@ -296,12 +296,19 @@ pub const SynthPlugin = struct {
 
         // Show window
         std.debug.print("Show UI\n", .{});
+        CLOSED.store(false, .seq_cst);
         ext.show.?(ext);
 
         std.debug.print("Wait\n", .{});
-        var i: usize = 0;
-        while (i < 600) : (i += 1) {
-            std.Thread.sleep(16 * std.time.ns_per_ms);
+        // var i: usize = 0;
+        // while (i < 600) : (i += 1) {
+        //     std.Thread.sleep(16 * std.time.ns_per_ms);
+        // }
+
+        // Pump until UI tells us it closed
+        while (!CLOSED.load(.seq_cst)) {
+            ext.run.?(ext);
+            std.Thread.sleep(16 * std.time.ns_per_ms); // ~60 Hz tick
         }
         ext.hide.?(ext);
     }
@@ -560,6 +567,26 @@ fn asExt(widget_ptr: ?*anyopaque) *LV2_External_UI_Widget {
 
     // 2) Now it’s safe to cast to the struct pointer
     return @as(*LV2_External_UI_Widget, @ptrCast(aligned));
+}
+
+// global “closed” flag flipped from the C callback
+var CLOSED = std.atomic.Value(bool).init(false);
+
+// Called by the UI when it closes its window
+// fn on_ui_closed(_: *LV2_External_UI_Widget) callconv(.c) void {
+fn on_ui_closed(_: ?*anyopaque) callconv(.c) void {
+    CLOSED.store(true, .seq_cst);
+}
+
+fn drive_until_closed(ext: *LV2_External_UI_Widget) void {
+    CLOSED.store(false, .seq_cst);
+    ext.show.?(ext);
+    // Pump until UI tells us it closed
+    while (!CLOSED.load(.seq_cst)) {
+        ext.run.?(ext);
+        std.time.sleep(16 * std.time.ns_per_ms); // ~60 Hz tick
+    }
+    ext.hide.?(ext);
 }
 
 // ===========================================================
