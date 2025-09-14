@@ -121,11 +121,12 @@ pub fn main() !void {
     var synth_plugin = try SynthPlugin.init(allocator, world.?, "https://surge-synthesizer.github.io/lv2/surge-xt");
     defer synth_plugin.deinit();
 
-    try playSound(synth_plugin);
+    try synth_plugin.showUI();
 
-    std.debug.print(" {any}\n", .{synth_plugin.audio_out_bufs[5]});
+    // try playSound(synth_plugin);
+    // std.debug.print(" {any}\n", .{synth_plugin.audio_out_bufs[5]});
 
-    std.debug.print("Hello", .{});
+    std.debug.print("Finished.\n", .{});
 }
 
 fn errorFromPa(code: pa.PaError) !void {

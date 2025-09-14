@@ -6,9 +6,13 @@ const c = @cImport({
     @cInclude("lv2/atom/atom.h");
     @cInclude("lv2/midi/midi.h");
     @cInclude("lv2/urid/urid.h");
+    @cInclude("lv2/ui/ui.h");
+    @cInclude("suil-0/suil/suil.h");
+    @cInclude("dlfcn.h");
 });
 
 const MidiSequence = @import("midi_sequence.zig").MidiSequence;
+const utils = @import("utils.zig");
 
 const sample_rate: f64 = 48000.0;
 const nframes: u32 = 383;
@@ -17,6 +21,10 @@ pub const SynthPlugin = struct {
     const Self = @This();
 
     allocator: std.mem.Allocator,
+    world: *c.LilvWorld,
+
+    plugin_uri: *c.LilvNode,
+    plugin: *const c.LilvPlugin,
     instance: [*c]c.LilvInstance,
 
     audio_in_bufs: []?[]f32,
@@ -30,22 +38,22 @@ pub const SynthPlugin = struct {
         world: *c.LilvWorld,
         plugin_uri_string: [*:0]const u8, // already a valid C string
     ) !*Self {
+
         // Allocate the plugin struct first
         const self = try allocator.create(SynthPlugin);
         errdefer allocator.destroy(self);
+
         self.allocator = allocator;
+        self.world = world;
 
         // Ensure plugin list exists
         const plugins = c.lilv_world_get_all_plugins(world);
         if (plugins == null) return error.NoPlugins;
 
-        const plugin_uri = c.lilv_new_uri(world, plugin_uri_string);
-        if (plugin_uri == null) return error.BadPluginUri;
-        defer c.lilv_node_free(plugin_uri);
+        self.plugin_uri = c.lilv_new_uri(world, plugin_uri_string) orelse return error.BadPluginUri;
+        defer c.lilv_node_free(self.plugin_uri);
 
-        const plugin = c.lilv_plugins_get_by_uri(plugins, plugin_uri);
-        if (plugin == null) return error.PluginNotFound;
-        // (Optionally, keep a handle/reference to `plugin` here if needed later)
+        self.plugin = c.lilv_plugins_get_by_uri(plugins, self.plugin_uri) orelse return error.PluginNotFound;
 
         // ----------------------------
         // 2) Provide LV2_URID_Map feature
@@ -70,10 +78,10 @@ pub const SynthPlugin = struct {
         // ----------------------------
         // 3) Instantiate the plugin
         // ----------------------------
-        self.instance = c.lilv_plugin_instantiate(plugin, sample_rate, &features);
+        self.instance = c.lilv_plugin_instantiate(self.plugin, sample_rate, &features);
         if (self.instance == null) return error.InstanceFailed;
 
-        try connectPorts(self, world, plugin);
+        try connectPorts(self, world, self.plugin);
 
         return self;
     }
@@ -200,6 +208,256 @@ pub const SynthPlugin = struct {
         c.lilv_instance_connect_port(self.instance, midi_in_port_index.?, self.midi_sequence.seq());
     }
 
+    pub fn showUI(self: *Self) !void {
+        const world = self.world;
+        const plugin = self.plugin;
+
+        const ext_ui_class = c.lilv_new_uri(world, "http://kxstudio.sf.net/ns/lv2ext/external-ui#Widget");
+        defer c.lilv_node_free(ext_ui_class);
+
+        // pick ExternalUI
+        const uis = c.lilv_plugin_get_uis(plugin);
+        var it = c.lilv_uis_begin(uis);
+        var ui: ?*const c.LilvUI = null;
+        while (!c.lilv_uis_is_end(uis, it)) : (it = c.lilv_uis_next(uis, it)) {
+            const u = c.lilv_uis_get(uis, it);
+            if (c.lilv_ui_is_a(u, ext_ui_class)) {
+                ui = u;
+                break;
+            }
+        }
+        if (ui == null) return;
+
+        // Required strings
+        const plugin_uri_c = c.lilv_node_as_uri(self.plugin_uri); // plugin URI
+        const ui_uri_c = c.lilv_node_as_uri(c.lilv_ui_get_uri(ui.?)); // selected UI URI
+        const ui_type_uri_c = "http://kxstudio.sf.net/ns/lv2ext/external-ui#Widget";
+
+        // Convert bundle/bin URIs → filesystem paths
+        const bundle_uri_c = c.lilv_node_as_uri(c.lilv_ui_get_bundle_uri(ui.?)) orelse return;
+        const binary_uri_c = c.lilv_node_as_uri(c.lilv_ui_get_binary_uri(ui.?)) orelse return;
+        const bundle_path_c = c.lilv_uri_to_path(bundle_uri_c) orelse return;
+        // const binary_path_c = c.lilv_uri_to_path(binary_uri_c) orelse return;
+
+        const path_encoded = c.lilv_uri_to_path(binary_uri_c) orelse {
+            std.log.err("lilv_uri_to_path failed for {s}", .{std.mem.sliceTo(binary_uri_c, 0)});
+            return error.CanNotConvertUriToPath;
+        };
+        const binary_path_c = try utils.decodeUriComponent(self.allocator, std.mem.sliceTo(path_encoded, 0));
+        defer self.allocator.free(binary_path_c);
+        std.debug.print("binary_path_c {s}\n", .{binary_path_c});
+
+        // suil host
+        const host = c.suil_host_new(uiWrite, uiIndex, uiSubscribe, uiUnsubscribe) orelse return;
+        defer c.suil_host_free(host);
+
+        // ExternalUI needs the external-ui host feature so it can notify closure (optional but good)
+        var ext_host = LV2_External_UI_Host{ .ui_closed = null }; // set callback if you want
+        const ext_host_feat = c.LV2_Feature{
+            .URI = "http://kxstudio.sf.net/ns/lv2ext/external-ui#Host",
+            .data = &ext_host,
+        };
+
+        const lv2_handle = c.lilv_instance_get_handle(self.instance) orelse return error.NoInstanceHandle;
+
+        // Required: instance-access -> pass LV2_Handle from the DSP instance
+        const instance_access_feat = c.LV2_Feature{
+            .URI = "http://lv2plug.in/ns/ext/instance-access",
+            .data = lv2_handle,
+        };
+
+        var features: [3]?*const c.LV2_Feature = .{ &ext_host_feat, &instance_access_feat, null };
+
+        // container_type_uri = null for ExternalUI (no embedding)
+        const inst = c.suil_instance_new(
+            host,
+            null, // controller
+            null, // container_type_uri (none for ExternalUI)
+            plugin_uri_c,
+            ui_uri_c,
+            ui_type_uri_c,
+            bundle_path_c, // *** filesystem path ***
+            binary_path_c, // *** filesystem path ***
+            &features,
+        ) orelse {
+            // suil prints an error already; add context:
+            std.log.err("suil_instance_new failed for UI {s} in {s}", .{ cstrZ(ui_uri_c), cstrZ(binary_path_c) });
+            return;
+        };
+        defer c.suil_instance_free(inst);
+
+        // Show and idle the UI (ExternalUI opens its own window)
+        // c.suil_instance_show(inst);
+        // 1) Get the UI widget and handle from suil
+        const widget_ptr = c.suil_instance_get_widget(inst); // void*
+        // const ui_handle = c.suil_instance_get_handle(inst); // LV2UI_Handle (void*)
+
+        const ext = asExt(widget_ptr);
+
+        // Show window
+        std.debug.print("Show UI\n", .{});
+        ext.show.?(ext);
+
+        std.debug.print("Wait\n", .{});
+        var i: usize = 0;
+        while (i < 600) : (i += 1) {
+            std.Thread.sleep(16 * std.time.ns_per_ms);
+        }
+        ext.hide.?(ext);
+    }
+
+    pub fn showUI2(self: *Self) !void {
+        const world = self.world;
+        const plugin = self.plugin;
+
+        const uis = c.lilv_plugin_get_uis(plugin) orelse return error.PluginHasNoUIs;
+        if (c.lilv_uis_size(uis) == 0) {
+            std.debug.print("Plugin has no UIs.\n", .{});
+            return;
+        }
+
+        // Assume `plugin: *const c.LilvPlugin`
+
+        {
+            var it = c.lilv_uis_begin(uis);
+            var idx: usize = 0;
+            while (!c.lilv_uis_is_end(uis, it)) : (it = c.lilv_uis_next(uis, it)) {
+                const ui = c.lilv_uis_get(uis, it);
+                if (ui == null) continue;
+
+                const ui_uri = c.lilv_ui_get_uri(ui);
+                const ui_uri_str = c.lilv_node_as_string(ui_uri);
+                std.debug.print("UI #{d}: {s}\n", .{ idx, ui_uri_str });
+
+                // Each UI may have one or more classes
+                const classes = c.lilv_ui_get_classes(ui);
+                var cit = c.lilv_nodes_begin(classes);
+                while (!c.lilv_nodes_is_end(classes, cit)) : (cit = c.lilv_nodes_next(classes, cit)) {
+                    const cls = c.lilv_nodes_get(classes, cit);
+                    const cls_str = c.lilv_node_as_string(cls);
+                    std.debug.print("    class: {s}\n", .{cls_str});
+                }
+
+                idx += 1;
+            }
+        }
+
+        // Iterator over the UIs and take the first
+        // const it = c.lilv_uis_begin(uis);
+        // const ui = c.lilv_uis_get(uis, it) orelse return error.FailedToGetUI;
+
+        // ExternalUI class URI
+        const ext_ui_class = c.lilv_new_uri(world, "http://kxstudio.sf.net/ns/lv2ext/external-ui#Widget");
+        defer c.lilv_node_free(ext_ui_class);
+
+        // Pick first ExternalUI
+        var chosen_ui_opt: ?*const c.LilvUI = null;
+        var it = c.lilv_uis_begin(uis);
+        while (!c.lilv_uis_is_end(uis, it)) : (it = c.lilv_uis_next(uis, it)) {
+            const ui = c.lilv_uis_get(uis, it);
+            if (c.lilv_ui_is_a(ui, ext_ui_class)) {
+                chosen_ui_opt = ui;
+                break;
+            }
+        }
+
+        const choosen_ui = chosen_ui_opt orelse return error.NoExternalUI;
+        std.debug.print("choosen UI = {}\n", .{choosen_ui});
+
+        const chosen_ui_uri = c.lilv_node_as_uri(c.lilv_ui_get_uri(choosen_ui));
+
+        // Load UI binary
+        const bin = c.lilv_ui_get_binary_uri(choosen_ui) orelse return error.NoBinaryUri;
+        const bin_uri = c.lilv_node_as_uri(bin);
+        const path_encoded = c.lilv_uri_to_path(bin_uri) orelse {
+            std.log.err("lilv_uri_to_path failed for {s}", .{std.mem.sliceTo(bin_uri, 0)});
+            return error.CanNotConvertUriToPath;
+        };
+
+        const path = try utils.decodeUriComponent(self.allocator, std.mem.sliceTo(path_encoded, 0));
+        defer self.allocator.free(path);
+
+        std.debug.print("path {s}\n", .{path});
+        const so = c.dlopen(path, c.RTLD_NOW) orelse {
+            if (c.dlerror()) |e| {
+                std.debug.print("Error while dlopen(\"{s}\"): {s}\n", .{ path, std.mem.sliceTo(e, 0) });
+            }
+            return error.DLOpenFailed;
+        };
+        defer _ = c.dlclose(so);
+
+        // Resolve lv2ui_descriptor
+        const sym = c.dlsym(so, "lv2ui_descriptor") orelse return;
+
+        // const GetDesc = *const fn (u32) ?*const c.LV2UI_Descriptor; // callconv(.C) is default for C
+        const GetDesc = *const fn (u32) callconv(.c) ?*const c.LV2UI_Descriptor;
+
+        const get_desc = @as(GetDesc, @ptrCast(sym));
+
+        // Enumerate descriptors until NULL, choose the one whose URI matches chosen_ui_uri
+        var desc: ?*const c.LV2UI_Descriptor = null;
+        var i: u32 = 0;
+        while (true) : (i += 1) {
+            const d = get_desc(i);
+            std.debug.print("get_desc({}) = {any}\n", .{ i, d });
+            if (d == null) break;
+            if (std.mem.eql(u8, cstrZ(d.?.URI), cstrZ(chosen_ui_uri))) {
+                desc = d;
+                break;
+            }
+        }
+        if (desc == null) {
+            std.log.err("No matching LV2UI_Descriptor found in {s} for UI {s}", .{ cstrZ(path_encoded), cstrZ(chosen_ui_uri) });
+            return;
+        }
+
+        // Bundle path (filesystem path, not URI)
+        // const bundle_uri = c.lilv_node_as_uri(c.lilv_ui_get_bundle_uri(choosen_ui)) orelse null;
+        // const bundle_path = if (bundle_uri) |u| c.lilv_uri_to_path(u) else null;
+
+        // // ExternalUI host feature
+        // var host = c.LV2_External_UI_Host{ .ui_closed = externalUiClosed };
+        // const host_feature = c.LV2_Feature{
+        //     .URI = "http://kxstudio.sf.net/ns/lv2ext/external-ui#Host",
+        //     .data = &host,
+        // };
+        // var features: [2]?*const c.LV2_Feature = .{ &host_feature, null };
+
+        // // Instantiate the UI
+        // var widget: ?*anyopaque = null;
+        // const handle = desc.?.instantiate.?(
+        //     desc.?,
+        //     c.lilv_node_as_uri(plug_uri), // plugin URI (not UI URI)
+        //     bundle_path,
+        //     uiWrite,
+        //     null,
+        //     &widget,
+        //     &features,
+        // ) orelse {
+        //     std.log.err("UI instantiate failed", .{});
+        //     return;
+        // };
+        // defer desc.?.cleanup.?(handle);
+
+        // const ext = @ptrCast(*c.LV2_External_UI_Widget, widget.?);
+        // ext.show.?(handle);
+
+        // // Drive run() ~60 Hz for a few seconds (replace with your app loop)
+        // var t: usize = 0;
+        // while (t < 600) : (t += 1) {
+        //     ext.run.?(handle);
+        //     std.time.sleep(16 * std.time.ns_per_ms);
+        // }
+
+        // ext.hide.?(handle);
+
+        // const lv2ui_descriptor = c.dlsym(so, "lv2ui_descriptor") orelse return error.NoUiDescriptorFunction;
+        // const get_desc = @as(*const fn (u32) ?*const c.LV2UI_Descriptor, @ptrCast(lv2ui_descriptor));
+        // const desc = get_desc(0) orelse return error.NoUiDescriptor;
+
+        // std.debug.print("desc {}\n", .{desc});
+    }
+
     pub fn run(self: *Self) void {
         // _ = self;
         c.lilv_instance_run(self.instance, nframes);
@@ -228,6 +486,81 @@ pub const SynthPlugin = struct {
         self.allocator.destroy(self);
     }
 };
+
+fn cstrZ(ptr: [*:0]const u8) []const u8 {
+    return std.mem.sliceTo(ptr, 0);
+}
+
+// Matches SuilWriteFunc
+fn uiWrite(
+    controller: ?*anyopaque,
+    port_index: u32,
+    buffer_size: u32,
+    protocol: u32,
+    buffer: ?*const anyopaque,
+) callconv(.c) void {
+    _ = controller;
+    _ = port_index;
+    _ = buffer_size;
+    _ = protocol;
+    _ = buffer;
+}
+
+// Matches SuilPortIndexFunc: uint32_t (*)(SuilController, const char*)
+fn uiIndex(controller: ?*anyopaque, port_symbol: [*c]const u8) callconv(.c) u32 {
+    _ = controller;
+    _ = port_symbol;
+    // If you need to compare: std.mem.span(port_symbol) gives you a []const u8 up to first 0
+    return 0;
+}
+
+// Matches SuilPortSubscribeFunc: uint32_t (*)(SuilController, uint32_t, uint32_t, const LV2_Feature* const*)
+fn uiSubscribe(controller: ?*anyopaque, port_index: u32, protocol: u32, features: [*c]const [*c]const c.LV2_Feature) callconv(.c) u32 {
+    _ = controller;
+    _ = port_index;
+    _ = protocol;
+    _ = features;
+    return 0;
+}
+
+fn uiUnsubscribe(controller: ?*anyopaque, port_index: u32, protocol: u32, features: [*c]const [*c]const c.LV2_Feature) callconv(.c) u32 {
+    _ = controller;
+    _ = port_index;
+    _ = protocol;
+    _ = features;
+    return 0;
+}
+
+// Minimal ExternalUI ABI (matches lv2_external_ui.h)
+pub const LV2_External_UI_Widget = extern struct {
+    run: ?*const fn (?*anyopaque) callconv(.c) void,
+    show: ?*const fn (?*anyopaque) callconv(.c) void,
+    hide: ?*const fn (?*anyopaque) callconv(.c) void,
+};
+
+pub const LV2_External_UI_Host = extern struct {
+    ui_closed: ?*const fn (?*anyopaque) callconv(.c) void,
+    // Some versions add: ui_resize: ?*const fn (?*anyopaque, c_int, c_int) callconv(.C) c_int,
+};
+
+// Feature URI you pass alongside this struct:
+pub const EXT_UI_HOST_URI = "http://kxstudio.sf.net/ns/lv2ext/external-ui#Host";
+
+// When you get the widget pointer from suil or lv2ui instantiate:
+fn asExternal(widget: ?*anyopaque) *LV2_External_UI_Widget {
+    return @ptrCast(widget.?);
+}
+
+fn asExt(widget_ptr: ?*anyopaque) *LV2_External_UI_Widget {
+    // Assert required alignment, then cast
+    const p = widget_ptr orelse @panic("ExternalUI widget is null");
+
+    // 1) Assert the alignment the struct requires
+    const aligned: *align(@alignOf(LV2_External_UI_Widget)) anyopaque = @alignCast(p);
+
+    // 2) Now it’s safe to cast to the struct pointer
+    return @as(*LV2_External_UI_Widget, @ptrCast(aligned));
+}
 
 // ===========================================================
 // Simple global URI→URID map for LV2_URID_Map (host feature)
