@@ -15,7 +15,7 @@ const MidiSequence = @import("midi_sequence.zig").MidiSequence;
 const utils = @import("utils.zig");
 
 const sample_rate: f64 = 48000.0;
-pub const nframes: u32 = 383;
+pub const max_frames: u32 = 4096;
 
 pub const SynthPlugin = struct {
     const Self = @This();
@@ -154,7 +154,7 @@ pub const SynthPlugin = struct {
 
             if (is_audio) {
                 // allocate audio buffers
-                const buf = try allocator.alloc(f32, nframes);
+                const buf = try allocator.alloc(f32, max_frames);
                 @memset(buf, 0);
                 if (is_input) {
                     self.audio_in_bufs[p] = buf;
@@ -465,9 +465,9 @@ pub const SynthPlugin = struct {
         // std.debug.print("desc {}\n", .{desc});
     }
 
-    pub fn run(self: *Self) void {
+    pub fn run(self: *Self, frames: u32) void {
         // _ = self;
-        c.lilv_instance_run(self.instance, nframes);
+        c.lilv_instance_run(self.instance, frames);
         self.midi_sequence.clear();
         // std.debug.print("Test {any}\n", .{self.instance});
     }
@@ -656,20 +656,14 @@ test "SynthPlugin initialization and deinitialization" {
 
     // synth_plugin.run();
 
-    try playSound2(synth_plugin);
+    try synth_plugin.midi_sequence.addEvent(0, &[_]u8{ 0x90, 60, 127 });
+    synth_plugin.run(256);
 
-    std.debug.print(" {any}\n", .{synth_plugin.audio_out_bufs[5]});
+    std.debug.print(" {any}\n", .{synth_plugin.audio_out_bufs[5].?[0..100]});
 
     // Ensure initialization returned a non-null pointer
     // try std.testing.expect(synth_plugin != null);
 
     // (deinit will run via defer; no double free)
 
-}
-
-fn playSound2(synth_plugin: *SynthPlugin) !void {
-    var state2: [1048]u8 = undefined;
-    @memset(&state2, 0);
-    synth_plugin.run();
-    std.debug.print("state2 {any}\n", .{state2[0..10]});
 }

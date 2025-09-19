@@ -36,11 +36,11 @@ fn audioCallback(
     const data: *State = @ptrCast(@alignCast(userData.?));
     const out: [*]f32 = @ptrCast(@alignCast(output));
 
-    if (frameCount != synth_plugin_mod.nframes) {
-        // std.debug.print("audioCallback got framecount {}\n", .{frameCount});
+    if (frameCount > synth_plugin_mod.max_frames) {
+        std.debug.print("audioCallback got framecount {}\n", .{frameCount});
     }
 
-    data.synth_plugin.run();
+    data.synth_plugin.run(@intCast(frameCount));
 
     for (0..frameCount) |i| {
         const v = data.synth_plugin.audio_out_bufs[5].?[i];
@@ -109,14 +109,14 @@ fn playSound(synth_plugin: *SynthPlugin) !void {
 
     _ = pa.Pa_StartStream(stream);
 
-    // try synth_plugin.showUI();
+    try synth_plugin.showUI();
 
     var midi_input = try MidiInput.init(std.heap.page_allocator);
     defer midi_input.deinit();
 
     for (0..100) |_| {
-        const midi_event_opt = midi_input.poll();
-        if (midi_event_opt) |midi_event| {
+        const midi_events = midi_input.poll();
+        for (midi_events) |midi_event| {
             var buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &buf, midi_event, .little); // or .little
             std.debug.print("MidiMessage: {any}\n", .{buf[0..3]});

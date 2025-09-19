@@ -14,6 +14,7 @@ const StreamRec = struct {
 pub const MidiInput = struct {
     allocator: std.mem.Allocator,
     streams: std.ArrayList(StreamRec),
+    midi_events: std.ArrayList(u32),
 
     const Self = @This();
 
@@ -70,7 +71,11 @@ pub const MidiInput = struct {
 
         std.debug.print("Listening on {d} input stream(s). Ctrl+C to quit.\n", .{streams.items.len});
 
-        return Self{ .allocator = allocator, .streams = streams };
+        return Self{
+            .allocator = allocator,
+            .streams = streams,
+            .midi_events = try std.ArrayList(u32).initCapacity(allocator, 100),
+        };
     }
 
     pub fn deinit(self: *Self) void {
@@ -78,10 +83,14 @@ pub const MidiInput = struct {
             _ = c.Pm_Close(stream.stream);
         }
         self.streams.deinit(self.allocator);
+
+        self.midi_events.deinit(self.allocator);
         defer _ = c.Pm_Terminate();
     }
 
-    pub fn poll(self: Self) ?u32 {
+    pub fn poll(self: *Self) []const u32 {
+        self.midi_events.clearRetainingCapacity();
+
         for (self.streams.items) |s| {
             // Fast poll: returns 1 if data available
             const has = c.Pm_Poll(s.stream);
@@ -95,12 +104,13 @@ pub const MidiInput = struct {
                         const ts_ms: i64 = @intCast(e.timestamp);
                         const msg: u32 = @bitCast(e.message);
                         print_midi(s.name, ts_ms, msg);
-                        return msg;
+                        self.midi_events.appendAssumeCapacity(msg);
                     }
                 }
             }
         }
-        return null;
+
+        return self.midi_events.items;
     }
 };
 
@@ -134,6 +144,6 @@ fn print_midi(device_name: []const u8, ts_ms: i64, msg: u32) void {
 test "MidiInput" {
     const allocator = std.testing.allocator;
     var midi_input = try MidiInput.init(allocator);
-    midi_input.poll();
+    _ = midi_input.poll();
     defer midi_input.deinit();
 }

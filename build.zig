@@ -129,6 +129,7 @@ pub fn build(b: *std.Build) void {
     // List of files containing tests
     const test_files = &[_][]const u8{
         "src/midi_sequence.zig",
+        "src/midi_input.zig",
         "src/synth_plugin.zig",
         "src/main.zig",
         "src/root.zig",
