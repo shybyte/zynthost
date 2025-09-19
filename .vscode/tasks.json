@@ -45,6 +45,7 @@
                 "test",
                 "-lc",
                 "-llilv-0",
+                "-lportmidi",
                 "${file}"
             ],
             "group": {

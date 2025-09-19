@@ -6,8 +6,10 @@ const pa = @cImport({
     @cInclude("portaudio.h");
 });
 
-const SynthPlugin = @import("synth_plugin.zig").SynthPlugin;
+const synth_plugin_mod = @import("synth_plugin.zig");
+const SynthPlugin = synth_plugin_mod.SynthPlugin;
 const create_world = @import("synth_plugin.zig").create_world;
+const MidiInput = @import("./midi_input.zig").MidiInput;
 
 const freq = 440.0; // A4 note
 const sample_rate = 44100;
@@ -30,10 +32,13 @@ fn audioCallback(
     _ = input;
     _ = timeInfo;
     _ = statusFlags;
-    // _ = frameCount;
 
     const data: *State = @ptrCast(@alignCast(userData.?));
     const out: [*]f32 = @ptrCast(@alignCast(output));
+
+    if (frameCount != synth_plugin_mod.nframes) {
+        std.debug.print("audioCallback got framecount {}\n", .{frameCount});
+    }
 
     data.synth_plugin.run();
 
@@ -42,7 +47,7 @@ fn audioCallback(
         // if (v != 0.0) {
         //     std.debug.print(" {}\n", .{v});
         // }
-        out[i] = v * 0.6;
+        out[i] = v * 0.01;
     }
 
     // const increment = 2.0 * std.math.pi * freq / @as(f32, sample_rate);
@@ -103,6 +108,9 @@ fn playSound(synth_plugin: *SynthPlugin) !void {
     defer _ = pa.Pa_CloseStream(stream);
 
     _ = pa.Pa_StartStream(stream);
+
+    // try synth_plugin.showUI();
+
     std.Thread.sleep(NumSeconds * std.time.ns_per_s);
     _ = pa.Pa_StopStream(stream);
 }
@@ -121,10 +129,17 @@ pub fn main() !void {
     var synth_plugin = try SynthPlugin.init(allocator, world.?, "https://surge-synthesizer.github.io/lv2/surge-xt");
     defer synth_plugin.deinit();
 
-    try synth_plugin.showUI();
-
+    // try synth_plugin.showUI();
     // try playSound(synth_plugin);
     // std.debug.print(" {any}\n", .{synth_plugin.audio_out_bufs[5]});
+
+    var midi_input = try MidiInput.init(allocator);
+    defer midi_input.deinit();
+
+    for (0..100) |_| {
+        midi_input.poll();
+        std.Thread.sleep(100 * std.time.ns_per_ms);
+    }
 
     std.debug.print("Finished.\n", .{});
 }

@@ -87,6 +87,7 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("lilv-0");
     exe.linkSystemLibrary("portaudio");
     exe.linkSystemLibrary("suil-0");
+    exe.linkSystemLibrary("portmidi");
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
@@ -145,6 +146,7 @@ pub fn build(b: *std.Build) void {
 
         test_exe.linkSystemLibrary("lilv-0");
         test_exe.linkSystemLibrary("portaudio");
+        test_exe.linkSystemLibrary("portmidi");
 
         const run_test_exe = b.addRunArtifact(test_exe);
         test_step.dependOn(&run_test_exe.step);

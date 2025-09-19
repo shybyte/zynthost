@@ -15,7 +15,7 @@ const MidiSequence = @import("midi_sequence.zig").MidiSequence;
 const utils = @import("utils.zig");
 
 const sample_rate: f64 = 48000.0;
-const nframes: u32 = 383;
+pub const nframes: u32 = 383;
 
 pub const SynthPlugin = struct {
     const Self = @This();
