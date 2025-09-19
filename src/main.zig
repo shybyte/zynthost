@@ -37,7 +37,7 @@ fn audioCallback(
     const out: [*]f32 = @ptrCast(@alignCast(output));
 
     if (frameCount != synth_plugin_mod.nframes) {
-        std.debug.print("audioCallback got framecount {}\n", .{frameCount});
+        // std.debug.print("audioCallback got framecount {}\n", .{frameCount});
     }
 
     data.synth_plugin.run();
@@ -47,7 +47,7 @@ fn audioCallback(
         // if (v != 0.0) {
         //     std.debug.print(" {}\n", .{v});
         // }
-        out[i] = v * 0.01;
+        out[i] = v * 0.5;
     }
 
     // const increment = 2.0 * std.math.pi * freq / @as(f32, sample_rate);
@@ -111,7 +111,22 @@ fn playSound(synth_plugin: *SynthPlugin) !void {
 
     // try synth_plugin.showUI();
 
-    std.Thread.sleep(NumSeconds * std.time.ns_per_s);
+    var midi_input = try MidiInput.init(std.heap.page_allocator);
+    defer midi_input.deinit();
+
+    for (0..100) |_| {
+        const midi_event_opt = midi_input.poll();
+        if (midi_event_opt) |midi_event| {
+            var buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &buf, midi_event, .little); // or .little
+            std.debug.print("MidiMessage: {any}\n", .{buf[0..3]});
+            try synth_plugin.midi_sequence.addEvent(0, buf[0..3]);
+        }
+
+        std.Thread.sleep(40 * std.time.ns_per_ms);
+    }
+
+    // std.Thread.sleep(NumSeconds * std.time.ns_per_s);
     _ = pa.Pa_StopStream(stream);
 }
 
@@ -130,16 +145,16 @@ pub fn main() !void {
     defer synth_plugin.deinit();
 
     // try synth_plugin.showUI();
-    // try playSound(synth_plugin);
+    try playSound(synth_plugin);
     // std.debug.print(" {any}\n", .{synth_plugin.audio_out_bufs[5]});
 
-    var midi_input = try MidiInput.init(allocator);
-    defer midi_input.deinit();
+    // var midi_input = try MidiInput.init(allocator);
+    // defer midi_input.deinit();
 
-    for (0..100) |_| {
-        midi_input.poll();
-        std.Thread.sleep(100 * std.time.ns_per_ms);
-    }
+    // for (0..100) |_| {
+    //     midi_input.poll();
+    //     std.Thread.sleep(100 * std.time.ns_per_ms);
+    // }
 
     std.debug.print("Finished.\n", .{});
 }

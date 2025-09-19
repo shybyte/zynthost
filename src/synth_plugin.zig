@@ -202,7 +202,7 @@ pub const SynthPlugin = struct {
         const midi_timeframe_urid = urid_map_func(null, "http://lv2plug.in/ns/ext/time#frame");
 
         self.midi_sequence = MidiSequence.init(self.backing[0..], atom_Sequence_urid, midi_MidiEvent_urid, midi_timeframe_urid);
-        try self.midi_sequence.addEvent(0, &[_]u8{ 0x90, 60, 127 });
+        // try self.midi_sequence.addEvent(0, &[_]u8{ 0x90, 60, 127 });
 
         // Connect the MIDI sequence to the discovered MIDI input port
         c.lilv_instance_connect_port(self.instance, midi_in_port_index.?, self.midi_sequence.seq());
@@ -468,6 +468,7 @@ pub const SynthPlugin = struct {
     pub fn run(self: *Self) void {
         // _ = self;
         c.lilv_instance_run(self.instance, nframes);
+        self.midi_sequence.clear();
         // std.debug.print("Test {any}\n", .{self.instance});
     }
 

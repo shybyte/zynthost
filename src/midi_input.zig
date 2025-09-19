@@ -81,7 +81,7 @@ pub const MidiInput = struct {
         defer _ = c.Pm_Terminate();
     }
 
-    pub fn poll(self: Self) void {
+    pub fn poll(self: Self) ?u32 {
         for (self.streams.items) |s| {
             // Fast poll: returns 1 if data available
             const has = c.Pm_Poll(s.stream);
@@ -95,10 +95,12 @@ pub const MidiInput = struct {
                         const ts_ms: i64 = @intCast(e.timestamp);
                         const msg: u32 = @bitCast(e.message);
                         print_midi(s.name, ts_ms, msg);
+                        return msg;
                     }
                 }
             }
         }
+        return null;
     }
 };
 
