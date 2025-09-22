@@ -509,7 +509,7 @@ pub fn create_world() ?*c.LilvWorld {
     return world;
 }
 
-pub fn listPlugins(world: *c.LilvWorld) void {
+fn listPlugins(world: *c.LilvWorld) void {
     const plugins = c.lilv_world_get_all_plugins(world);
     if (plugins == null) {
         std.debug.print("No LV2 plugins found\n", .{});
@@ -524,10 +524,54 @@ pub fn listPlugins(world: *c.LilvWorld) void {
         const plugin = c.lilv_plugins_get(plugins, it);
         if (plugin == null) continue;
 
-        const uri = c.lilv_node_as_string(c.lilv_plugin_get_uri(plugin));
-        if (uri != null) {
-            std.debug.print("Plugin URI: {s}\n", .{std.mem.span(uri)});
+        // --- URI ---
+        const uri_c = c.lilv_node_as_string(c.lilv_plugin_get_uri(plugin));
+        if (uri_c != null) {
+            std.debug.print("URI: {s}\n", .{std.mem.span(uri_c)});
+        } else {
+            std.debug.print("URI: (unknown)\n", .{});
         }
+
+        // --- Name ---
+        const name_node = c.lilv_plugin_get_name(plugin);
+        if (name_node != null) {
+            const name_c = c.lilv_node_as_string(name_node);
+            std.debug.print("  Name: {s}\n", .{std.mem.span(name_c)});
+        } else {
+            std.debug.print("  Name: Unknown\n", .{});
+        }
+
+        // --- Class label ---
+        const class_ptr = c.lilv_plugin_get_class(plugin);
+        if (class_ptr != null) {
+            const label_node = c.lilv_plugin_class_get_label(class_ptr);
+            if (label_node != null) {
+                const label_c = c.lilv_node_as_string(label_node);
+                std.debug.print("  Class: {s}\n", .{std.mem.span(label_c)});
+            } else {
+                std.debug.print("  Class: Unknown\n", .{});
+            }
+        } else {
+            std.debug.print("  Class: Unknown\n", .{});
+        }
+
+        // --- Library (shared object) URI and best-effort file path ---
+        const lib_node = c.lilv_plugin_get_library_uri(plugin);
+        if (lib_node != null) {
+            const lib_uri_c = c.lilv_node_as_string(lib_node);
+            const lib_uri = std.mem.span(lib_uri_c);
+            std.debug.print("  Library URI: {s}\n", .{lib_uri});
+
+            // Best-effort path view if it's a file:// URI (no percent-decoding here).
+            if (std.mem.startsWith(u8, lib_uri, "file://")) {
+                const path = lib_uri["file://".len..];
+                std.debug.print("  Library Path (best-effort): {s}\n", .{path});
+            }
+        } else {
+            std.debug.print("  Library: (unknown)\n", .{});
+        }
+
+        std.debug.print("\n", .{});
     }
 }
 
