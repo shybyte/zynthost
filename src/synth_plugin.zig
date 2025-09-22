@@ -267,10 +267,11 @@ pub const SynthPlugin = struct {
 
         var features: [3]?*const c.LV2_Feature = .{ &ext_host_feat, &instance_access_feat, null };
 
-        // container_type_uri = null for ExternalUI (no embedding)
+        var session = UiSession{}; // lives until showUI returns
+
         const inst = c.suil_instance_new(
             host,
-            null, // controller
+            &session, // controller
             null, // container_type_uri (none for ExternalUI)
             plugin_uri_c,
             ui_uri_c,
@@ -295,12 +296,12 @@ pub const SynthPlugin = struct {
 
         // Show window
         std.debug.print("Show UI\n", .{});
-        CLOSED.store(false, .seq_cst);
+        session.closed.store(false, .seq_cst);
         ext.show.?(ext);
         defer ext.hide.?(ext);
 
         // Pump until UI tells us it closed
-        while (!CLOSED.load(.seq_cst)) {
+        while (!session.closed.load(.seq_cst)) {
             ext.run.?(ext);
             // std.Thread.sleep(16 * std.time.ns_per_ms); // ~60 Hz tick
             std.Thread.sleep(32 * std.time.ns_per_ms); // ~30 Hz tick
@@ -444,13 +445,16 @@ fn asExt(widget_ptr: ?*anyopaque) *LV2_External_UI_Widget {
     return @as(*LV2_External_UI_Widget, @ptrCast(aligned));
 }
 
-// global “closed” flag flipped from the C callback
-var CLOSED = std.atomic.Value(bool).init(false);
+const UiSession = struct {
+    closed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+};
 
 // Called by the UI when it closes its window
-// fn on_ui_closed(_: *LV2_External_UI_Widget) callconv(.c) void {
-fn on_ui_closed(_: ?*anyopaque) callconv(.c) void {
-    CLOSED.store(true, .seq_cst);
+fn on_ui_closed(controller: ?*anyopaque) callconv(.c) void {
+    if (controller) |p| {
+        const sess: *UiSession = @ptrCast(p);
+        sess.closed.store(true, .seq_cst);
+    }
 }
 
 // ===========================================================
