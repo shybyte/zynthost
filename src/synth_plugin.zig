@@ -29,6 +29,8 @@ pub const SynthPlugin = struct {
 
     audio_in_bufs: []?[]f32,
     audio_out_bufs: []?[]f32,
+    audio_ports: std.ArrayList(usize),
+
     control_in_vals: []f32,
     backing: [1024]u8 align(8),
     midi_sequence: MidiSequence,
@@ -45,6 +47,7 @@ pub const SynthPlugin = struct {
 
         self.allocator = allocator;
         self.world = world;
+        self.audio_ports = try std.ArrayList(usize).initCapacity(allocator, 100);
 
         // Ensure plugin list exists
         const plugins = c.lilv_world_get_all_plugins(world);
@@ -161,6 +164,7 @@ pub const SynthPlugin = struct {
                     c.lilv_instance_connect_port(self.instance, p, buf.ptr);
                 } else if (is_output) {
                     std.debug.print("Found Audio out at port {} \n", .{p});
+                    self.audio_ports.appendAssumeCapacity(p);
                     self.audio_out_bufs[p] = buf;
                     c.lilv_instance_connect_port(self.instance, p, buf.ptr);
                 }
@@ -361,6 +365,7 @@ pub const SynthPlugin = struct {
             }
         }
         self.allocator.free(self.audio_out_bufs);
+        self.audio_ports.deinit(self.allocator);
 
         self.allocator.free(self.control_in_vals);
 
@@ -504,6 +509,28 @@ pub fn create_world() ?*c.LilvWorld {
     return world;
 }
 
+pub fn listPlugins(world: *c.LilvWorld) void {
+    const plugins = c.lilv_world_get_all_plugins(world);
+    if (plugins == null) {
+        std.debug.print("No LV2 plugins found\n", .{});
+        c.lilv_world_free(world);
+        return;
+    }
+
+    const iter = c.lilv_plugins_begin(plugins);
+    var it = iter;
+
+    while (!c.lilv_plugins_is_end(plugins, it)) : (it = c.lilv_plugins_next(plugins, it)) {
+        const plugin = c.lilv_plugins_get(plugins, it);
+        if (plugin == null) continue;
+
+        const uri = c.lilv_node_as_string(c.lilv_plugin_get_uri(plugin));
+        if (uri != null) {
+            std.debug.print("Plugin URI: {s}\n", .{std.mem.span(uri)});
+        }
+    }
+}
+
 // ---- Tests ----
 
 test "SynthPlugin initialization and deinitialization" {
@@ -514,12 +541,16 @@ test "SynthPlugin initialization and deinitialization" {
     try std.testing.expect(world != null);
     defer c.lilv_world_free(world.?);
 
-    c.lilv_world_load_all(world.?);
+    listPlugins(world.?);
 
     // Initialize with a known valid C string literal
     var synth_plugin = try SynthPlugin.init(allocator, world.?, "https://surge-synthesizer.github.io/lv2/surge-xt");
     defer synth_plugin.deinit();
     defer deinitUridTable();
+
+    try std.testing.expectEqual(2, synth_plugin.audio_ports.items.len);
+    try std.testing.expectEqual(5, synth_plugin.audio_ports.items[0]);
+    try std.testing.expectEqual(6, synth_plugin.audio_ports.items[1]);
 
     // synth_plugin.run();
 

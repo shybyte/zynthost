@@ -47,8 +47,13 @@ fn audioCallback(
     data.synth_plugin.run(@intCast(frameCount));
 
     for (0..frameCount) |i| {
-        const v = data.synth_plugin.audio_out_bufs[5].?[i]; // TODO: No hardcoded audio port + Mix L/R
-        out[i] = v * 0.5;
+        var value_sum: f32 = 0.0;
+
+        for (data.synth_plugin.audio_ports.items) |audio_port_index| {
+            value_sum += data.synth_plugin.audio_out_bufs[audio_port_index].?[i];
+        }
+
+        out[i] = value_sum / @as(f32, @floatFromInt(data.synth_plugin.audio_ports.items.len)) * 0.5;
     }
 
     return pa.paContinue;
@@ -177,7 +182,8 @@ pub fn main() !void {
 
     // c.lilv_world_load_all(world.?);
 
-    var synth_plugin = try SynthPlugin.init(allocator, world.?, "https://surge-synthesizer.github.io/lv2/surge-xt");
+    // var synth_plugin = try SynthPlugin.init(allocator, world.?, "https://surge-synthesizer.github.io/lv2/surge-xt");
+    var synth_plugin = try SynthPlugin.init(allocator, world.?, "http://tytel.org/helm");
     defer synth_plugin.deinit();
 
     // try synth_plugin.showUI();
