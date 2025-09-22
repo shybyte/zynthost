@@ -14,12 +14,8 @@ const MidiInput = @import("./midi_input.zig").MidiInput;
 const freq = 440.0; // A4 note
 const sample_rate = 44100;
 const volume: f32 = 0.1; // Set desired output volume (0.0 to 1.0)
-const NumSeconds = 2;
 
-const State = struct {
-    phase: f64 = 0.0,
-    synth_plugin: *SynthPlugin,
-};
+const State = struct { phase: f64 = 0.0, synth_plugin: *SynthPlugin, midi_input: *MidiInput };
 
 fn audioCallback(
     input: ?*const anyopaque,
@@ -40,33 +36,33 @@ fn audioCallback(
         std.debug.print("audioCallback got framecount {}\n", .{frameCount});
     }
 
+    const midi_events = data.midi_input.poll();
+    for (midi_events) |midi_event| {
+        var buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &buf, midi_event, .little);
+        std.debug.print("MidiMessage: {any}\n", .{buf[0..3]});
+        data.synth_plugin.midi_sequence.addEvent(0, buf[0..3]);
+    }
+
     data.synth_plugin.run(@intCast(frameCount));
 
     for (0..frameCount) |i| {
-        const v = data.synth_plugin.audio_out_bufs[5].?[i];
-        // if (v != 0.0) {
-        //     std.debug.print(" {}\n", .{v});
-        // }
+        const v = data.synth_plugin.audio_out_bufs[5].?[i]; // TODO: No hardcoded audio port + Mix L/R
         out[i] = v * 0.5;
     }
-
-    // const increment = 2.0 * std.math.pi * freq / @as(f32, sample_rate);
-    // var i: u32 = 0;
-    // // std.debug.print("framecount {}\n", .{frameCount});
-    // while (i < frameCount) : (i += 1) {
-    //     out[i] = volume * @as(f32, @floatCast(std.math.sin(data.phase)));
-
-    //     data.phase += increment;
-    //     if (data.phase >= 2.0 * std.math.pi) {
-    //         data.phase -= 2.0 * std.math.pi;
-    //     }
-    // }
 
     return pa.paContinue;
 }
 
 fn playSound(synth_plugin: *SynthPlugin) !void {
-    var state = State{ .synth_plugin = synth_plugin };
+    var midi_input = try MidiInput.init(std.heap.page_allocator);
+    defer midi_input.deinit();
+
+    var state = State{
+        .synth_plugin = synth_plugin,
+        .midi_input = &midi_input,
+    };
+
     const err = pa.Pa_Initialize();
     if (err != pa.paNoError) return errorFromPa(err);
     defer _ = pa.Pa_Terminate();
@@ -110,23 +106,8 @@ fn playSound(synth_plugin: *SynthPlugin) !void {
     _ = pa.Pa_StartStream(stream);
 
     try synth_plugin.showUI();
+    // std.Thread.sleep(2 * std.time.ns_per_s);
 
-    var midi_input = try MidiInput.init(std.heap.page_allocator);
-    defer midi_input.deinit();
-
-    for (0..100) |_| {
-        const midi_events = midi_input.poll();
-        for (midi_events) |midi_event| {
-            var buf: [4]u8 = undefined;
-            std.mem.writeInt(u32, &buf, midi_event, .little); // or .little
-            std.debug.print("MidiMessage: {any}\n", .{buf[0..3]});
-            try synth_plugin.midi_sequence.addEvent(0, buf[0..3]);
-        }
-
-        std.Thread.sleep(40 * std.time.ns_per_ms);
-    }
-
-    // std.Thread.sleep(NumSeconds * std.time.ns_per_s);
     _ = pa.Pa_StopStream(stream);
 }
 

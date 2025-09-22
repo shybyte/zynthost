@@ -46,8 +46,8 @@ pub const MidiSequence = struct {
         body_ptr.pad = 0;
     }
 
-    pub fn addEvent(self: *MidiSequence, time_frames: i64, data: []const u8) !void {
-        if (data.len > std.math.maxInt(u32)) return error.InvalidMidiSize;
+    pub fn addEvent(self: *MidiSequence, time_frames: i64, data: []const u8) void {
+        std.debug.assert(data.len == 3);
 
         const seq_ptr = self.seq();
         const total_len = self.buf.len;
@@ -64,7 +64,7 @@ pub const MidiSequence = struct {
         const header_sz = @sizeOf(EventHeader);
         const unaligned = header_sz + data.len;
         const aligned = roundUp8(unaligned);
-        if (write_off + aligned > total_len) return error.NoSpace;
+        std.debug.assert(write_off + aligned <= total_len);
 
         var p: [*]u8 = self.buf.ptr + write_off;
 
@@ -99,8 +99,8 @@ pub const MidiSequence = struct {
 test "MidiSequence frames" {
     var backing: [1024]u8 align(8) = undefined;
     var ms = MidiSequence.init(backing[0..], 1, 2, 3);
-    try ms.addEvent(128, &[_]u8{ 0x90, 60, 100 });
-    try ms.addEvent(512, &[_]u8{ 0x80, 60, 64 });
+    ms.addEvent(128, &[_]u8{ 0x90, 60, 100 });
+    ms.addEvent(512, &[_]u8{ 0x80, 60, 64 });
     ms.clear();
     const seq_ptr = ms.seq();
     try std.testing.expect(@as(usize, @intCast(seq_ptr.atom.size)) == @sizeOf(c.LV2_Atom_Sequence_Body));
@@ -125,8 +125,8 @@ test "MidiSequence adds two MIDI events with correct layout" {
     const ev1 = [_]u8{ 0x90, 60, 100 };
     const ev2 = [_]u8{ 0x80, 60, 0 };
 
-    try seq.addEvent(0, &ev1);
-    try seq.addEvent(480, &ev2);
+    seq.addEvent(0, &ev1);
+    seq.addEvent(480, &ev2);
 
     const seq_ptr: *c.LV2_Atom_Sequence = seq.seq();
 

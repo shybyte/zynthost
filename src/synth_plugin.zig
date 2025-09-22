@@ -215,6 +215,8 @@ pub const SynthPlugin = struct {
         const ext_ui_class = c.lilv_new_uri(world, "http://kxstudio.sf.net/ns/lv2ext/external-ui#Widget");
         defer c.lilv_node_free(ext_ui_class);
 
+        try self.listUIs();
+
         // pick ExternalUI
         const uis = c.lilv_plugin_get_uis(plugin);
         var it = c.lilv_uis_begin(uis);
@@ -234,18 +236,15 @@ pub const SynthPlugin = struct {
         const ui_type_uri_c = "http://kxstudio.sf.net/ns/lv2ext/external-ui#Widget";
 
         // Convert bundle/bin URIs → filesystem paths
-        const bundle_uri_c = c.lilv_node_as_uri(c.lilv_ui_get_bundle_uri(ui.?)) orelse return;
         const binary_uri_c = c.lilv_node_as_uri(c.lilv_ui_get_binary_uri(ui.?)) orelse return;
-        const bundle_path_c = c.lilv_uri_to_path(bundle_uri_c) orelse return;
-        // const binary_path_c = c.lilv_uri_to_path(binary_uri_c) orelse return;
-
-        const path_encoded = c.lilv_uri_to_path(binary_uri_c) orelse {
-            std.log.err("lilv_uri_to_path failed for {s}", .{std.mem.sliceTo(binary_uri_c, 0)});
-            return error.CanNotConvertUriToPath;
-        };
-        const binary_path_c = try utils.decodeUriComponent(self.allocator, std.mem.sliceTo(path_encoded, 0));
+        const binary_path_c = try utils.convertUritoPath(self.allocator, binary_uri_c);
         defer self.allocator.free(binary_path_c);
         std.debug.print("binary_path_c {s}\n", .{binary_path_c});
+
+        const bundle_uri_c = c.lilv_node_as_uri(c.lilv_ui_get_bundle_uri(ui.?)) orelse return;
+        const bundle_path_c = try utils.convertUritoPath(self.allocator, bundle_uri_c);
+        defer self.allocator.free(bundle_path_c);
+        std.debug.print("bundle_path_c {s}\n", .{bundle_path_c});
 
         // suil host
         const host = c.suil_host_new(uiWrite, uiIndex, uiSubscribe, uiUnsubscribe) orelse return;
@@ -298,23 +297,17 @@ pub const SynthPlugin = struct {
         std.debug.print("Show UI\n", .{});
         CLOSED.store(false, .seq_cst);
         ext.show.?(ext);
-
-        std.debug.print("Wait\n", .{});
-        // var i: usize = 0;
-        // while (i < 600) : (i += 1) {
-        //     std.Thread.sleep(16 * std.time.ns_per_ms);
-        // }
+        defer ext.hide.?(ext);
 
         // Pump until UI tells us it closed
         while (!CLOSED.load(.seq_cst)) {
             ext.run.?(ext);
-            std.Thread.sleep(16 * std.time.ns_per_ms); // ~60 Hz tick
+            // std.Thread.sleep(16 * std.time.ns_per_ms); // ~60 Hz tick
+            std.Thread.sleep(32 * std.time.ns_per_ms); // ~30 Hz tick
         }
-        ext.hide.?(ext);
     }
 
-    pub fn showUI2(self: *Self) !void {
-        const world = self.world;
+    fn listUIs(self: *Self) !void {
         const plugin = self.plugin;
 
         const uis = c.lilv_plugin_get_uis(plugin) orelse return error.PluginHasNoUIs;
@@ -323,146 +316,27 @@ pub const SynthPlugin = struct {
             return;
         }
 
-        // Assume `plugin: *const c.LilvPlugin`
-
-        {
-            var it = c.lilv_uis_begin(uis);
-            var idx: usize = 0;
-            while (!c.lilv_uis_is_end(uis, it)) : (it = c.lilv_uis_next(uis, it)) {
-                const ui = c.lilv_uis_get(uis, it);
-                if (ui == null) continue;
-
-                const ui_uri = c.lilv_ui_get_uri(ui);
-                const ui_uri_str = c.lilv_node_as_string(ui_uri);
-                std.debug.print("UI #{d}: {s}\n", .{ idx, ui_uri_str });
-
-                // Each UI may have one or more classes
-                const classes = c.lilv_ui_get_classes(ui);
-                var cit = c.lilv_nodes_begin(classes);
-                while (!c.lilv_nodes_is_end(classes, cit)) : (cit = c.lilv_nodes_next(classes, cit)) {
-                    const cls = c.lilv_nodes_get(classes, cit);
-                    const cls_str = c.lilv_node_as_string(cls);
-                    std.debug.print("    class: {s}\n", .{cls_str});
-                }
-
-                idx += 1;
-            }
-        }
-
-        // Iterator over the UIs and take the first
-        // const it = c.lilv_uis_begin(uis);
-        // const ui = c.lilv_uis_get(uis, it) orelse return error.FailedToGetUI;
-
-        // ExternalUI class URI
-        const ext_ui_class = c.lilv_new_uri(world, "http://kxstudio.sf.net/ns/lv2ext/external-ui#Widget");
-        defer c.lilv_node_free(ext_ui_class);
-
-        // Pick first ExternalUI
-        var chosen_ui_opt: ?*const c.LilvUI = null;
         var it = c.lilv_uis_begin(uis);
+        var idx: usize = 0;
         while (!c.lilv_uis_is_end(uis, it)) : (it = c.lilv_uis_next(uis, it)) {
             const ui = c.lilv_uis_get(uis, it);
-            if (c.lilv_ui_is_a(ui, ext_ui_class)) {
-                chosen_ui_opt = ui;
-                break;
+            if (ui == null) continue;
+
+            const ui_uri = c.lilv_ui_get_uri(ui);
+            const ui_uri_str = c.lilv_node_as_string(ui_uri);
+            std.debug.print("UI #{d}: {s}\n", .{ idx, ui_uri_str });
+
+            // Each UI may have one or more classes
+            const classes = c.lilv_ui_get_classes(ui);
+            var cit = c.lilv_nodes_begin(classes);
+            while (!c.lilv_nodes_is_end(classes, cit)) : (cit = c.lilv_nodes_next(classes, cit)) {
+                const cls = c.lilv_nodes_get(classes, cit);
+                const cls_str = c.lilv_node_as_string(cls);
+                std.debug.print("    class: {s}\n", .{cls_str});
             }
+
+            idx += 1;
         }
-
-        const choosen_ui = chosen_ui_opt orelse return error.NoExternalUI;
-        std.debug.print("choosen UI = {}\n", .{choosen_ui});
-
-        const chosen_ui_uri = c.lilv_node_as_uri(c.lilv_ui_get_uri(choosen_ui));
-
-        // Load UI binary
-        const bin = c.lilv_ui_get_binary_uri(choosen_ui) orelse return error.NoBinaryUri;
-        const bin_uri = c.lilv_node_as_uri(bin);
-        const path_encoded = c.lilv_uri_to_path(bin_uri) orelse {
-            std.log.err("lilv_uri_to_path failed for {s}", .{std.mem.sliceTo(bin_uri, 0)});
-            return error.CanNotConvertUriToPath;
-        };
-
-        const path = try utils.decodeUriComponent(self.allocator, std.mem.sliceTo(path_encoded, 0));
-        defer self.allocator.free(path);
-
-        std.debug.print("path {s}\n", .{path});
-        const so = c.dlopen(path, c.RTLD_NOW) orelse {
-            if (c.dlerror()) |e| {
-                std.debug.print("Error while dlopen(\"{s}\"): {s}\n", .{ path, std.mem.sliceTo(e, 0) });
-            }
-            return error.DLOpenFailed;
-        };
-        defer _ = c.dlclose(so);
-
-        // Resolve lv2ui_descriptor
-        const sym = c.dlsym(so, "lv2ui_descriptor") orelse return;
-
-        // const GetDesc = *const fn (u32) ?*const c.LV2UI_Descriptor; // callconv(.C) is default for C
-        const GetDesc = *const fn (u32) callconv(.c) ?*const c.LV2UI_Descriptor;
-
-        const get_desc = @as(GetDesc, @ptrCast(sym));
-
-        // Enumerate descriptors until NULL, choose the one whose URI matches chosen_ui_uri
-        var desc: ?*const c.LV2UI_Descriptor = null;
-        var i: u32 = 0;
-        while (true) : (i += 1) {
-            const d = get_desc(i);
-            std.debug.print("get_desc({}) = {any}\n", .{ i, d });
-            if (d == null) break;
-            if (std.mem.eql(u8, cstrZ(d.?.URI), cstrZ(chosen_ui_uri))) {
-                desc = d;
-                break;
-            }
-        }
-        if (desc == null) {
-            std.log.err("No matching LV2UI_Descriptor found in {s} for UI {s}", .{ cstrZ(path_encoded), cstrZ(chosen_ui_uri) });
-            return;
-        }
-
-        // Bundle path (filesystem path, not URI)
-        // const bundle_uri = c.lilv_node_as_uri(c.lilv_ui_get_bundle_uri(choosen_ui)) orelse null;
-        // const bundle_path = if (bundle_uri) |u| c.lilv_uri_to_path(u) else null;
-
-        // // ExternalUI host feature
-        // var host = c.LV2_External_UI_Host{ .ui_closed = externalUiClosed };
-        // const host_feature = c.LV2_Feature{
-        //     .URI = "http://kxstudio.sf.net/ns/lv2ext/external-ui#Host",
-        //     .data = &host,
-        // };
-        // var features: [2]?*const c.LV2_Feature = .{ &host_feature, null };
-
-        // // Instantiate the UI
-        // var widget: ?*anyopaque = null;
-        // const handle = desc.?.instantiate.?(
-        //     desc.?,
-        //     c.lilv_node_as_uri(plug_uri), // plugin URI (not UI URI)
-        //     bundle_path,
-        //     uiWrite,
-        //     null,
-        //     &widget,
-        //     &features,
-        // ) orelse {
-        //     std.log.err("UI instantiate failed", .{});
-        //     return;
-        // };
-        // defer desc.?.cleanup.?(handle);
-
-        // const ext = @ptrCast(*c.LV2_External_UI_Widget, widget.?);
-        // ext.show.?(handle);
-
-        // // Drive run() ~60 Hz for a few seconds (replace with your app loop)
-        // var t: usize = 0;
-        // while (t < 600) : (t += 1) {
-        //     ext.run.?(handle);
-        //     std.time.sleep(16 * std.time.ns_per_ms);
-        // }
-
-        // ext.hide.?(handle);
-
-        // const lv2ui_descriptor = c.dlsym(so, "lv2ui_descriptor") orelse return error.NoUiDescriptorFunction;
-        // const get_desc = @as(*const fn (u32) ?*const c.LV2UI_Descriptor, @ptrCast(lv2ui_descriptor));
-        // const desc = get_desc(0) orelse return error.NoUiDescriptor;
-
-        // std.debug.print("desc {}\n", .{desc});
     }
 
     pub fn run(self: *Self, frames: u32) void {
@@ -579,17 +453,6 @@ fn on_ui_closed(_: ?*anyopaque) callconv(.c) void {
     CLOSED.store(true, .seq_cst);
 }
 
-fn drive_until_closed(ext: *LV2_External_UI_Widget) void {
-    CLOSED.store(false, .seq_cst);
-    ext.show.?(ext);
-    // Pump until UI tells us it closed
-    while (!CLOSED.load(.seq_cst)) {
-        ext.run.?(ext);
-        std.time.sleep(16 * std.time.ns_per_ms); // ~60 Hz tick
-    }
-    ext.hide.?(ext);
-}
-
 // ===========================================================
 // Simple global URI→URID map for LV2_URID_Map (host feature)
 // ===========================================================
@@ -656,7 +519,7 @@ test "SynthPlugin initialization and deinitialization" {
 
     // synth_plugin.run();
 
-    try synth_plugin.midi_sequence.addEvent(0, &[_]u8{ 0x90, 60, 127 });
+    synth_plugin.midi_sequence.addEvent(0, &[_]u8{ 0x90, 60, 127 });
     synth_plugin.run(256);
 
     std.debug.print(" {any}\n", .{synth_plugin.audio_out_bufs[5].?[0..100]});
