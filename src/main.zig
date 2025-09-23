@@ -186,8 +186,15 @@ pub fn main() !void {
     var synth_plugin = try SynthPlugin.init(allocator, world.?, "http://tytel.org/helm");
     defer synth_plugin.deinit();
 
+    const plugin_patch_filename = "patches/plugin_patch.json";
+    synth_plugin.loadState(plugin_patch_filename) catch |err| {
+        std.debug.print("Failed to load plugin patch {}\n", .{err});
+    };
+
     // try synth_plugin.showUI();
     try playSound(synth_plugin);
+
+    try synth_plugin.saveState(plugin_patch_filename);
     // std.debug.print(" {any}\n", .{synth_plugin.audio_out_bufs[5]});
 
     // var midi_input = try MidiInput.init(allocator);

@@ -183,7 +183,11 @@ pub const SynthPlugin = struct {
                 c.lilv_port_get_range(plugin, port, def_ptr, min_ptr, max_ptr);
                 const v: f32 = if (def_node) |dn| @floatCast(c.lilv_node_as_float(dn)) else 0.0;
                 self.control_in_vals[p] = v;
-                // std.debug.print("Set Controll {}\n", .{self.control_in_vals[p]});
+
+                const sym_node = c.lilv_port_get_symbol(self.plugin, port);
+                const sym_c = c.lilv_node_as_string(sym_node) orelse continue;
+                std.debug.print("Set Controll {} {s} {}\n", .{ p, sym_c, self.control_in_vals[p] });
+
                 c.lilv_instance_connect_port(self.instance, p, &self.control_in_vals[p]);
             } else {
                 // For non-audio/atom outputs etc., we skip in this minimal example.
@@ -271,7 +275,7 @@ pub const SynthPlugin = struct {
 
         var features: [3]?*const c.LV2_Feature = .{ &ext_host_feat, &instance_access_feat, null };
 
-        var session = UiSession{}; // lives until showUI returns
+        var session = UiSession{ .plugin = self }; // lives until showUI returns
 
         const inst = c.suil_instance_new(
             host,
@@ -351,12 +355,89 @@ pub const SynthPlugin = struct {
         // std.debug.print("Test {any}\n", .{self.instance});
     }
 
-    fn saveState(
+    // Saves the current control values to a JSON file which is a control-name/value map.
+    // Does not use lilv_state_new_from_instance because this crashes.
+    pub fn saveState(
         self: *Self,
-        path: [:0]const u8, // directory where state will be written
+        path: []const u8,
     ) !void {
-        _ = self;
-        std.debug.print("saveState {s}\n", .{path});
+        const file = try std.fs.cwd().createFile(path, .{
+            .read = false,
+            .truncate = true,
+        });
+        defer file.close();
+        var buf: [4096]u8 = undefined;
+        var w = file.writer(buf[0..]);
+
+        const uri_lv2_InputPort = c.lilv_new_uri(self.world, "http://lv2plug.in/ns/lv2core#InputPort");
+        const uri_lv2_ControlPort = c.lilv_new_uri(self.world, "http://lv2plug.in/ns/lv2core#ControlPort");
+        defer {
+            c.lilv_node_free(uri_lv2_InputPort);
+            c.lilv_node_free(uri_lv2_ControlPort);
+        }
+
+        const nports: u32 = @intCast(c.lilv_plugin_get_num_ports(self.plugin));
+        var stringify = std.json.Stringify{ .writer = &w.interface, .options = .{ .whitespace = .indent_2 } };
+        try stringify.beginObject();
+
+        for (0..nports) |p| {
+            const port = c.lilv_plugin_get_port_by_index(self.plugin, @intCast(p));
+            if (!(c.lilv_port_is_a(self.plugin, port, uri_lv2_InputPort) and
+                c.lilv_port_is_a(self.plugin, port, uri_lv2_ControlPort))) continue;
+
+            const sym_node = c.lilv_port_get_symbol(self.plugin, port);
+            const sym_c = c.lilv_node_as_string(sym_node) orelse continue;
+            const val: f32 = self.control_in_vals[p];
+            try stringify.objectField(std.mem.span(sym_c));
+            try stringify.write(val);
+
+            std.debug.print("Save value {s} {}\n", .{ sym_c, val });
+        }
+
+        try stringify.endObject();
+
+        try w.interface.flush();
+
+        std.debug.print("Saved control state to {s}\n", .{path});
+    }
+
+    pub fn loadState(
+        self: *Self,
+        path: []const u8,
+    ) !void {
+        const file_content = try std.fs.cwd().readFileAlloc(self.allocator, path, 1 << 20);
+        defer self.allocator.free(file_content);
+
+        const parsed = try std.json.parseFromSlice(std.json.ArrayHashMap(f32), self.allocator, file_content, .{});
+        defer parsed.deinit();
+
+        const map: std.json.ArrayHashMap(f32) = parsed.value;
+
+        const uri_lv2_InputPort = c.lilv_new_uri(self.world, "http://lv2plug.in/ns/lv2core#InputPort");
+        const uri_lv2_ControlPort = c.lilv_new_uri(self.world, "http://lv2plug.in/ns/lv2core#ControlPort");
+        defer {
+            // For unknown reasons freeing these nodes, cause an segmentation faulf later in synth_plugin.showUI();
+            // c.lilv_node_free(uri_lv2_InputPort);
+            // c.lilv_node_free(uri_lv2_ControlPort);
+        }
+
+        const nports: u32 = @intCast(c.lilv_plugin_get_num_ports(self.plugin));
+
+        for (0..nports) |port_index| {
+            const port = c.lilv_plugin_get_port_by_index(self.plugin, @intCast(port_index));
+            if (!(c.lilv_port_is_a(self.plugin, port, uri_lv2_InputPort) and
+                c.lilv_port_is_a(self.plugin, port, uri_lv2_ControlPort))) continue;
+
+            const sym_node = c.lilv_port_get_symbol(self.plugin, port);
+            const sym_c = c.lilv_node_as_string(sym_node) orelse continue;
+            const sym_str = std.mem.span(sym_c);
+
+            if (map.map.get(sym_str)) |val| {
+                self.control_in_vals[port_index] = val;
+                // c.lilv_instance_connect_port(self.instance, @intCast(port_index), &self.control_in_vals[port_index]);
+                std.debug.print("Loaded state for port {s}: {d}\n", .{ sym_str, val });
+            }
+        }
     }
 
     pub fn deinit(self: *Self) void {
@@ -395,18 +476,32 @@ fn uiWrite(
     protocol: u32,
     buffer: ?*const anyopaque,
 ) callconv(.c) void {
-    _ = controller;
-    _ = port_index;
-    _ = buffer_size;
-    _ = protocol;
-    _ = buffer;
+    // _ = port_index;
+    // _ = buffer_size;
+    // _ = protocol;
+    // _ = buffer;
+    std.debug.print("uiWrite portIndex {} {} {} {?}\n", .{ port_index, protocol, buffer_size, buffer });
+
+    const sess: *UiSession = @ptrCast(@alignCast(controller));
+    const plugin = sess.*.plugin;
+    // Bounds check
+    if (port_index < plugin.control_in_vals.len and protocol == 0 and buffer != null and buffer_size == @sizeOf(f32)) {
+        const fptr: *const f32 = @ptrCast(@alignCast(buffer.?));
+        plugin.control_in_vals[port_index] = fptr.*;
+        std.debug.print("New val: {}\n", .{fptr.*});
+        // No need to reconnect; pointer is stable.
+        // If you want to observe changes:
+        // std.debug.print("UI wrote port {} = {d}\n", .{ port_index, fptr.* });
+        return;
+    }
 }
 
 // Matches SuilPortIndexFunc: uint32_t (*)(SuilController, const char*)
 fn uiIndex(controller: ?*anyopaque, port_symbol: [*c]const u8) callconv(.c) u32 {
     _ = controller;
-    _ = port_symbol;
+    // _ = port_symbol;
     // If you need to compare: std.mem.span(port_symbol) gives you a []const u8 up to first 0
+    std.debug.print("uiIndex port_symbol {s}\n", .{port_symbol});
     return 0;
 }
 
@@ -460,12 +555,13 @@ fn asExt(widget_ptr: ?*anyopaque) *LV2_External_UI_Widget {
 
 const UiSession = struct {
     closed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    plugin: *SynthPlugin,
 };
 
 // Called by the UI when it closes its window
 fn on_ui_closed(controller: ?*anyopaque) callconv(.c) void {
     if (controller) |p| {
-        const sess: *UiSession = @ptrCast(p);
+        const sess: *UiSession = @ptrCast(@alignCast(p));
         sess.closed.store(true, .seq_cst);
     }
 }
@@ -614,5 +710,7 @@ test "SynthPlugin initialization and deinitialization" {
 
     std.debug.print(" {any}\n", .{synth_plugin.audio_out_bufs[5].?[0..100]});
 
-    try synth_plugin.saveState("/tmp/saved-plugin-state.json");
+    const file_name = "/tmp/saved-plugin-state.json";
+    try synth_plugin.saveState(file_name);
+    try synth_plugin.loadState(file_name);
 }
