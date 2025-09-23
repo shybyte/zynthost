@@ -5,7 +5,6 @@ const c = @cImport({
     @cInclude("lv2/core/lv2.h");
     @cInclude("lv2/atom/atom.h");
     @cInclude("lv2/midi/midi.h");
-    @cInclude("lv2/state/state.h");
     @cInclude("lv2/urid/urid.h");
     @cInclude("lv2/ui/ui.h");
     @cInclude("suil-0/suil/suil.h");
@@ -354,51 +353,10 @@ pub const SynthPlugin = struct {
 
     fn saveState(
         self: *Self,
-        dir_path: [:0]const u8, // directory where state will be written
-        state_basename: [:0]const u8, // e.g. "myplugin-state.ttl"
+        path: [:0]const u8, // directory where state will be written
     ) !void {
-        std.debug.print("saveState {s} {s}\n", .{ dir_path, state_basename });
-
-        var urid_map_feature_data: c.LV2_URID_Map = .{
-            .handle = null,
-            .map = urid_map_func,
-        };
-
-        const c_dir: [*:0]const u8 = "/tmp"; // or a dir that exists
-
-        const state = c.lilv_state_new_from_instance(
-            self.plugin,
-            self.instance,
-            &urid_map_feature_data,
-            c_dir,
-            c_dir,
-            c_dir,
-            c_dir,
-            get_value,
-            null,
-            c.LV2_STATE_IS_POD | c.LV2_STATE_IS_PORTABLE,
-            null,
-        ) orelse return error.CaptureFailed;
-
-        std.debug.print("state {any}\n", .{state});
-
-        defer c.lilv_state_free(state);
-
-        // // Build full path "<dir>/<basename>"
-        // var buf: [std.fs.max_path_bytes]u8 = undefined;
-        // const full = try std.fmt.bufPrintZ(&buf, "{s}/{s}", .{ dir_path, state_basename });
-
-        // // Save: Lilv will create a .ttl, and possibly a directory for blobs
-        // const ok = c.lilv_state_save(
-        //     self.world,
-        //     &urid_map_feature_data,
-        //     null, // unmap not needed here
-        //     state,
-        //     null, // uri for the state (optional, host-specific)
-        //     full,
-        //     null, // file_dir (optional)
-        // );
-        // if (ok != 0) return error.SaveFailed;
+        _ = self;
+        std.debug.print("saveState {s}\n", .{path});
     }
 
     pub fn deinit(self: *Self) void {
@@ -424,24 +382,6 @@ pub const SynthPlugin = struct {
         self.allocator.destroy(self);
     }
 };
-
-var zero: f32 = 0;
-
-fn get_value(port_symbol: [*c]const u8, user_data: ?*anyopaque, size: [*c]u32, value_type: [*c]u32) callconv(.c) ?*const anyopaque {
-    _ = user_data;
-    _ = port_symbol;
-    _ = size;
-    _ = value_type;
-    // std.debug.print("get_value {s}\n", .{port_symbol});
-    // const float_id = urid_map_func(null, "http://lv2plug.in/ns/ext/atom#Float");
-    // _ = port_symbol;
-    // value_type.* = float_id;
-    // size.* = @sizeOf(f32);
-    // return &zero;
-    // value_type.* = 0;
-    // size.* = 0;
-    return null;
-}
 
 fn cstrZ(ptr: [*:0]const u8) []const u8 {
     return std.mem.sliceTo(ptr, 0);
@@ -548,11 +488,11 @@ fn deinitUridTable() void {
     uri_table.deinit();
 }
 
-export fn urid_map_func2(handle: ?*anyopaque, uri: ?[*:0]const u8) callconv(.c) c.LV2_URID {
+export fn urid_map_func(handle: ?*anyopaque, uri: ?[*:0]const u8) callconv(.c) c.LV2_URID {
     _ = handle;
     const s = std.mem.span(uri.?);
 
-    std.debug.print("urid_map_func {s}\n", .{uri.?});
+    // std.debug.print("urid_map_func {s}\n", .{uri.?});
 
     if (table_inited) {
         if (uri_table.get(s)) |found| return found;
@@ -561,7 +501,7 @@ export fn urid_map_func2(handle: ?*anyopaque, uri: ?[*:0]const u8) callconv(.c) 
         const id: c_uint = next_urid;
         next_urid += 1;
         _ = uri_table.put(dup, id) catch return 0;
-        std.debug.print("urid_map_func return  {s} {}\n", .{ uri.?, id });
+        // std.debug.print("urid_map_func return  {s} {}\n", .{ uri.?, id });
         return id;
     } else {
         // Fallback linear counter if somehow called before init
@@ -569,16 +509,6 @@ export fn urid_map_func2(handle: ?*anyopaque, uri: ?[*:0]const u8) callconv(.c) 
         next_urid += 1;
         return id2;
     }
-}
-
-fn urid_map_func(_: ?*anyopaque, uri: ?[*:0]const u8) callconv(.c) c.LV2_URID {
-    // Simple stable hash; never returns 0
-    var h: u32 = 1469598101;
-    var i: usize = 0;
-    while (uri.?[i] != 0) : (i += 1) {
-        h = (h ^ uri.?[i]) *% 16777619;
-    }
-    return if (h == 0) 1 else @intCast(h);
 }
 
 pub fn create_world() ?*c.LilvWorld {
@@ -684,5 +614,5 @@ test "SynthPlugin initialization and deinitialization" {
 
     std.debug.print(" {any}\n", .{synth_plugin.audio_out_bufs[5].?[0..100]});
 
-    try synth_plugin.saveState("/tmp", "saved-state");
+    try synth_plugin.saveState("/tmp/saved-plugin-state.json");
 }
