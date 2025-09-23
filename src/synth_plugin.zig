@@ -54,8 +54,6 @@ pub const SynthPlugin = struct {
         if (plugins == null) return error.NoPlugins;
 
         self.plugin_uri = c.lilv_new_uri(world, plugin_uri_string) orelse return error.BadPluginUri;
-        defer c.lilv_node_free(self.plugin_uri);
-
         self.plugin = c.lilv_plugins_get_by_uri(plugins, self.plugin_uri) orelse return error.PluginNotFound;
 
         // ----------------------------
@@ -63,25 +61,10 @@ pub const SynthPlugin = struct {
         // ----------------------------
         try initUridTable(allocator); // initializes global URI→URID map used by the C callback
 
-        var urid_map_feature_data: c.LV2_URID_Map = .{
-            .handle = null,
-            .map = urid_map_func,
-        };
-
-        var urid_map_feature: c.LV2_Feature = .{
-            .URI = "http://lv2plug.in/ns/ext/urid#map",
-            .data = &urid_map_feature_data,
-        };
-
-        var features = [_]?*const c.LV2_Feature{
-            &urid_map_feature,
-            null, // terminator
-        };
-
         // ----------------------------
         // 3) Instantiate the plugin
         // ----------------------------
-        self.instance = c.lilv_plugin_instantiate(self.plugin, sample_rate, &features);
+        self.instance = c.lilv_plugin_instantiate(self.plugin, sample_rate, &urid_map_features);
         if (self.instance == null) return error.InstanceFailed;
 
         try connectPorts(self, world, self.plugin);
@@ -184,9 +167,9 @@ pub const SynthPlugin = struct {
                 const v: f32 = if (def_node) |dn| @floatCast(c.lilv_node_as_float(dn)) else 0.0;
                 self.control_in_vals[p] = v;
 
-                const sym_node = c.lilv_port_get_symbol(self.plugin, port);
-                const sym_c = c.lilv_node_as_string(sym_node) orelse continue;
-                std.debug.print("Set Controll {} {s} {}\n", .{ p, sym_c, self.control_in_vals[p] });
+                // const sym_node = c.lilv_port_get_symbol(self.plugin, port);
+                // const sym_c = c.lilv_node_as_string(sym_node) orelse continue;
+                // std.debug.print("Set Controll {} {s} {}\n", .{ p, sym_c, self.control_in_vals[p] });
 
                 c.lilv_instance_connect_port(self.instance, p, &self.control_in_vals[p]);
             } else {
@@ -355,89 +338,90 @@ pub const SynthPlugin = struct {
         // std.debug.print("Test {any}\n", .{self.instance});
     }
 
-    // Saves the current control values to a JSON file which is a control-name/value map.
-    // Does not use lilv_state_new_from_instance because this crashes.
-    pub fn saveState(
-        self: *Self,
-        path: []const u8,
-    ) !void {
-        const file = try std.fs.cwd().createFile(path, .{
-            .read = false,
-            .truncate = true,
-        });
-        defer file.close();
-        var buf: [4096]u8 = undefined;
-        var w = file.writer(buf[0..]);
+    pub fn saveState(self: *Self) !void {
+        const path = "/tmp";
 
-        const uri_lv2_InputPort = c.lilv_new_uri(self.world, "http://lv2plug.in/ns/lv2core#InputPort");
-        const uri_lv2_ControlPort = c.lilv_new_uri(self.world, "http://lv2plug.in/ns/lv2core#ControlPort");
-        defer {
-            c.lilv_node_free(uri_lv2_InputPort);
-            c.lilv_node_free(uri_lv2_ControlPort);
+        const state = c.lilv_state_new_from_instance(
+            self.plugin,
+            self.instance,
+            &urid_map, // LV2_URID_Map*
+            path,
+            path,
+            path,
+            path,
+            null,
+            null,
+            0,
+            null, // const LV2_Feature* const* (optional)
+        );
+
+        if (state == null) {
+            std.debug.print("lilv_state_new_from_instance returned null (plugin may require extra state features).\n", .{});
+            return error.StateCreationFailed;
+        }
+        defer c.lilv_state_free(state.?);
+
+        std.debug.print("Successfully created LV2 state from instance.\n", .{});
+
+        // Save: Lilv will create a .ttl, and possibly a directory for blobs
+        const ok = c.lilv_state_save(
+            self.world,
+            &urid_map,
+            &urid_un_map,
+            state,
+            null, // uri for the state (optional, host-specific)
+            path,
+            "test.ttl",
+        );
+        if (ok != 0) {
+            return error.SaveFailed;
         }
 
-        const nports: u32 = @intCast(c.lilv_plugin_get_num_ports(self.plugin));
-        var stringify = std.json.Stringify{ .writer = &w.interface, .options = .{ .whitespace = .indent_2 } };
-        try stringify.beginObject();
-
-        for (0..nports) |p| {
-            const port = c.lilv_plugin_get_port_by_index(self.plugin, @intCast(p));
-            if (!(c.lilv_port_is_a(self.plugin, port, uri_lv2_InputPort) and
-                c.lilv_port_is_a(self.plugin, port, uri_lv2_ControlPort))) continue;
-
-            const sym_node = c.lilv_port_get_symbol(self.plugin, port);
-            const sym_c = c.lilv_node_as_string(sym_node) orelse continue;
-            const val: f32 = self.control_in_vals[p];
-            try stringify.objectField(std.mem.span(sym_c));
-            try stringify.write(val);
-
-            std.debug.print("Save value {s} {}\n", .{ sym_c, val });
-        }
-
-        try stringify.endObject();
-
-        try w.interface.flush();
-
-        std.debug.print("Saved control state to {s}\n", .{path});
+        std.debug.print("Successfully saved LV2 state from instance.\n", .{});
     }
 
-    pub fn loadState(
-        self: *Self,
-        path: []const u8,
-    ) !void {
-        const file_content = try std.fs.cwd().readFileAlloc(self.allocator, path, 1 << 20);
-        defer self.allocator.free(file_content);
+    pub fn loadState(self: *Self, dir: [*:0]const u8, filename: [*:0]const u8) !void {
+        const path = "/tmp/test.ttl";
 
-        const parsed = try std.json.parseFromSlice(std.json.ArrayHashMap(f32), self.allocator, file_content, .{});
-        defer parsed.deinit();
+        const file = std.fs.cwd().openFile(path, .{}) catch |err| switch (err) {
+            error.FileNotFound => {
+                std.debug.print("File '{s}' does not exist.\n", .{path});
+                return;
+            },
+            else => return err, // propagate other errors
+        };
+        defer file.close();
 
-        const map: std.json.ArrayHashMap(f32) = parsed.value;
+        const state = c.lilv_state_new_from_file(
+            self.world,
+            &urid_map,
+            null,
+            "/tmp/test.ttl",
+        );
 
-        const uri_lv2_InputPort = c.lilv_new_uri(self.world, "http://lv2plug.in/ns/lv2core#InputPort");
-        const uri_lv2_ControlPort = c.lilv_new_uri(self.world, "http://lv2plug.in/ns/lv2core#ControlPort");
-        defer {
-            // For unknown reasons freeing these nodes, cause an segmentation faulf later in synth_plugin.showUI();
-            // c.lilv_node_free(uri_lv2_InputPort);
-            // c.lilv_node_free(uri_lv2_ControlPort);
+        if (state == null) {
+            std.debug.print("Failed to load LV2 state from {s}/{s}\n", .{ std.mem.span(dir), std.mem.span(filename) });
+            return error.StateLoadFailed;
         }
 
-        const nports: u32 = @intCast(c.lilv_plugin_get_num_ports(self.plugin));
+        defer c.lilv_state_free(state.?);
 
-        for (0..nports) |port_index| {
-            const port = c.lilv_plugin_get_port_by_index(self.plugin, @intCast(port_index));
-            if (!(c.lilv_port_is_a(self.plugin, port, uri_lv2_InputPort) and
-                c.lilv_port_is_a(self.plugin, port, uri_lv2_ControlPort))) continue;
+        // Many plugins expect to be inactive while restoring
+        c.lilv_instance_deactivate(self.instance);
 
-            const sym_node = c.lilv_port_get_symbol(self.plugin, port);
-            const sym_c = c.lilv_node_as_string(sym_node) orelse continue;
-            const sym_str = std.mem.span(sym_c);
+        c.lilv_state_restore(
+            state.?,
+            self.instance,
+            setPortValueBySymbol, // will write control values into control_in_vals
+            self, // user_data passed to setPortValue
+            0, // flags (usually 0)
+            null, // const LV2_Feature* const* (optional extra features)
+        );
 
-            if (map.map.get(sym_str)) |val| {
-                self.control_in_vals[port_index] = val;
-                // c.lilv_instance_connect_port(self.instance, @intCast(port_index), &self.control_in_vals[port_index]);
-                std.debug.print("Loaded state for port {s}: {d}\n", .{ sym_str, val });
-            }
-        }
+        // Reactivate either way; bail on error
+        c.lilv_instance_activate(self.instance);
+
+        std.debug.print("Successfully restored LV2 state from {s}/{s}\n", .{ std.mem.span(dir), std.mem.span(filename) });
     }
 
     pub fn deinit(self: *Self) void {
@@ -458,11 +442,73 @@ pub const SynthPlugin = struct {
 
         self.allocator.free(self.control_in_vals);
 
+        c.lilv_node_free(self.plugin_uri);
         c.lilv_instance_deactivate(self.instance);
         c.lilv_instance_free(self.instance);
         self.allocator.destroy(self);
     }
 };
+
+// Find a port index by its symbol (C string) on this plugin
+fn findPortIndexBySymbol(self: *SynthPlugin, sym_c: [*c]const u8) ?u32 {
+    const sym = std.mem.span(sym_c);
+    const nports: u32 = @intCast(c.lilv_plugin_get_num_ports(self.plugin));
+    var p: u32 = 0;
+    while (p < nports) : (p += 1) {
+        const port = c.lilv_plugin_get_port_by_index(self.plugin, p);
+        const node = c.lilv_port_get_symbol(self.plugin, port);
+        if (node != null) {
+            const node_c: [*:0]const u8 = c.lilv_node_as_string(node);
+            if (std.mem.eql(u8, std.mem.span(node_c), sym)) return p;
+        }
+    }
+    return null;
+}
+
+// Correct LilvSetPortValueFunc signature (symbol-based)
+fn setPortValueBySymbol(
+    port_symbol: [*c]const u8,
+    user_data: ?*anyopaque,
+    value: ?*const anyopaque,
+    size: u32,
+    type_urid: u32,
+) callconv(.c) void {
+    _ = type_urid; // Most control floats use 0; we don't need to branch on type here.
+    if (user_data == null or value == null) return;
+
+    const self: *SynthPlugin = @ptrCast(@alignCast(user_data.?));
+
+    std.debug.print("setPortValueBySymbol {s}\n", .{port_symbol});
+
+    // We only handle simple control floats wired to control_in_vals
+    if (size != @sizeOf(f32)) return;
+
+    const idx = findPortIndexBySymbol(self, port_symbol) orelse return;
+
+    // Bounds-checked write into the backing buffer already connected to the plugin
+    if (idx < self.control_in_vals.len) {
+        const fptr: *const f32 = @ptrCast(@alignCast(value.?));
+        self.control_in_vals[idx] = fptr.*;
+    }
+}
+
+var zero: f32 = 0;
+
+fn get_value(port_symbol: [*c]const u8, user_data: ?*anyopaque, size: [*c]u32, value_type: [*c]u32) callconv(.c) ?*const anyopaque {
+    _ = user_data;
+    // _ = port_symbol;
+    // _ = size;
+    // _ = value_type;
+    std.debug.print("get_value {s}\n", .{port_symbol});
+    const float_id = urid_map_func(null, "http://lv2plug.in/ns/ext/atom#Float");
+    // _ = port_symbol;
+    value_type.* = float_id;
+    size.* = @sizeOf(f32);
+    return &zero;
+    // value_type.* = 0;
+    // size.* = 0;
+    // return null;
+}
 
 fn cstrZ(ptr: [*:0]const u8) []const u8 {
     return std.mem.sliceTo(ptr, 0);
@@ -593,7 +639,7 @@ export fn urid_map_func(handle: ?*anyopaque, uri: ?[*:0]const u8) callconv(.c) c
     if (table_inited) {
         if (uri_table.get(s)) |found| return found;
         // Copy the key because s points to plugin/lilv-owned memory
-        const dup = std.heap.page_allocator.dupe(u8, s) catch return 0;
+        const dup = std.heap.page_allocator.dupeZ(u8, s) catch return 0;
         const id: c_uint = next_urid;
         next_urid += 1;
         _ = uri_table.put(dup, id) catch return 0;
@@ -606,6 +652,42 @@ export fn urid_map_func(handle: ?*anyopaque, uri: ?[*:0]const u8) callconv(.c) c
         return id2;
     }
 }
+
+export fn urid_unmap_func(handle: ?*anyopaque, urid: c.LV2_URID) callconv(.c) ?[*:0]const u8 {
+    _ = handle;
+    if (!table_inited) return null;
+
+    var it = uri_table.iterator();
+    while (it.next()) |entry| {
+        if (entry.value_ptr.* == urid) {
+            // The key we stored is a dup’d string; ensure it is NUL-terminated
+            // If you used dupeZ, you can safely cast:
+            const z: [:0]const u8 = @ptrCast(entry.key_ptr.*);
+            return z.ptr;
+        }
+    }
+    return null;
+}
+
+var urid_map: c.LV2_URID_Map = .{
+    .handle = null,
+    .map = urid_map_func,
+};
+
+var urid_un_map: c.LV2_URID_Unmap = .{
+    .handle = null,
+    .unmap = urid_unmap_func,
+};
+
+var urid_map_feature: c.LV2_Feature = .{
+    .URI = "http://lv2plug.in/ns/ext/urid#map",
+    .data = &urid_map,
+};
+
+var urid_map_features = [_]?*const c.LV2_Feature{
+    &urid_map_feature,
+    null, // terminator
+};
 
 pub fn create_world() ?*c.LilvWorld {
     const world = c.lilv_world_new();
@@ -699,18 +781,19 @@ test "SynthPlugin initialization and deinitialization" {
     defer synth_plugin.deinit();
     defer deinitUridTable();
 
+    try synth_plugin.saveState();
+    try synth_plugin.loadState("/tmp", "test.ttl");
+
     try std.testing.expectEqual(2, synth_plugin.audio_ports.items.len);
     try std.testing.expectEqual(5, synth_plugin.audio_ports.items[0]);
     try std.testing.expectEqual(6, synth_plugin.audio_ports.items[1]);
-
-    // synth_plugin.run();
 
     synth_plugin.midi_sequence.addEvent(0, &[_]u8{ 0x90, 60, 127 });
     synth_plugin.run(256);
 
     std.debug.print(" {any}\n", .{synth_plugin.audio_out_bufs[5].?[0..100]});
 
-    const file_name = "/tmp/saved-plugin-state.json";
-    try synth_plugin.saveState(file_name);
-    try synth_plugin.loadState(file_name);
+    // const file_name = "/tmp/saved-plugin-state.json";
+    // try synth_plugin.saveState(file_name);
+    // try synth_plugin.loadState(file_name);
 }

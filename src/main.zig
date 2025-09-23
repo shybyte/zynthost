@@ -63,11 +63,6 @@ fn playSound(synth_plugin: *SynthPlugin) !void {
     var midi_input = try MidiInput.init(std.heap.page_allocator);
     defer midi_input.deinit();
 
-    var state = State{
-        .synth_plugin = synth_plugin,
-        .midi_input = &midi_input,
-    };
-
     const err = pa.Pa_Initialize();
     if (err != pa.paNoError) return errorFromPa(err);
     defer _ = pa.Pa_Terminate();
@@ -77,6 +72,11 @@ fn playSound(synth_plugin: *SynthPlugin) !void {
         std.debug.print("Error getting host API count\n", .{});
         return;
     }
+
+    var state = State{
+        .synth_plugin = synth_plugin,
+        .midi_input = &midi_input,
+    };
 
     std.debug.print("Available Host APIs:\n", .{});
     var jack_host_index: c_int = 0;
@@ -168,7 +168,6 @@ fn playSound(synth_plugin: *SynthPlugin) !void {
 
     try synth_plugin.showUI();
     // std.Thread.sleep(2 * std.time.ns_per_s);
-
 }
 
 pub fn main() !void {
@@ -182,19 +181,19 @@ pub fn main() !void {
 
     // c.lilv_world_load_all(world.?);
 
-    // var synth_plugin = try SynthPlugin.init(allocator, world.?, "https://surge-synthesizer.github.io/lv2/surge-xt");
-    var synth_plugin = try SynthPlugin.init(allocator, world.?, "http://tytel.org/helm");
+    var synth_plugin = try SynthPlugin.init(allocator, world.?, "https://surge-synthesizer.github.io/lv2/surge-xt");
+    // var synth_plugin = try SynthPlugin.init(allocator, world.?, "http://tytel.org/helm");
     defer synth_plugin.deinit();
 
-    const plugin_patch_filename = "patches/plugin_patch.json";
-    synth_plugin.loadState(plugin_patch_filename) catch |err| {
+    // const plugin_patch_filename = "patches/plugin_patch.json";
+    synth_plugin.loadState("/tmp", "test.ttl") catch |err| {
         std.debug.print("Failed to load plugin patch {}\n", .{err});
     };
 
     // try synth_plugin.showUI();
     try playSound(synth_plugin);
 
-    try synth_plugin.saveState(plugin_patch_filename);
+    try synth_plugin.saveState();
     // std.debug.print(" {any}\n", .{synth_plugin.audio_out_bufs[5]});
 
     // var midi_input = try MidiInput.init(allocator);
