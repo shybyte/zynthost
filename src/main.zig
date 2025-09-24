@@ -66,7 +66,7 @@ pub fn main() !void {
     const world = try synth_plugin_mod.create_world(allocator);
     defer synth_plugin_mod.free_world();
 
-    // var synth_plugin = try SynthPlugin.init(allocator, world.?, "https://surge-synthesizer.github.io/lv2/surge-xt");
+    // var synth_plugin = try SynthPlugin.init(allocator, world, "https://surge-synthesizer.github.io/lv2/surge-xt");
     var synth_plugin = try SynthPlugin.init(allocator, world, "http://tytel.org/helm");
     defer synth_plugin.deinit();
 
@@ -86,7 +86,8 @@ pub fn main() !void {
     try audio_output.startAudio(&state, audioCallback);
     defer audio_output.stopAudio();
 
-    try synth_plugin.showUI();
+    const session = try synth_plugin.showUI();
+    session.waitUntilClosed();
 
     // try synth_plugin.saveState();
 

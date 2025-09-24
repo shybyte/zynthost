@@ -35,6 +35,8 @@ pub const SynthPlugin = struct {
     backing: [1024]u8 align(8),
     midi_sequence: MidiSequence,
 
+    session: UiSession,
+
     pub fn init(
         allocator: std.mem.Allocator,
         world: *c.LilvWorld,
@@ -188,104 +190,10 @@ pub const SynthPlugin = struct {
         c.lilv_instance_connect_port(self.instance, midi_in_port_index.?, self.midi_sequence.seq());
     }
 
-    pub fn showUI(self: *Self) !void {
-        const world = self.world;
-        const plugin = self.plugin;
-
-        const ext_ui_class = c.lilv_new_uri(world, "http://kxstudio.sf.net/ns/lv2ext/external-ui#Widget");
-        defer c.lilv_node_free(ext_ui_class);
-
-        try self.listUIs();
-
-        // pick ExternalUI
-        const uis = c.lilv_plugin_get_uis(plugin);
-        var it = c.lilv_uis_begin(uis);
-        var ui: ?*const c.LilvUI = null;
-        while (!c.lilv_uis_is_end(uis, it)) : (it = c.lilv_uis_next(uis, it)) {
-            const u = c.lilv_uis_get(uis, it);
-            if (c.lilv_ui_is_a(u, ext_ui_class)) {
-                ui = u;
-                break;
-            }
-        }
-        if (ui == null) return;
-
-        // Required strings
-        const plugin_uri_c = c.lilv_node_as_uri(self.plugin_uri); // plugin URI
-        const ui_uri_c = c.lilv_node_as_uri(c.lilv_ui_get_uri(ui.?)); // selected UI URI
-        const ui_type_uri_c = "http://kxstudio.sf.net/ns/lv2ext/external-ui#Widget";
-
-        // Convert bundle/bin URIs → filesystem paths
-        const binary_uri_c = c.lilv_node_as_uri(c.lilv_ui_get_binary_uri(ui.?)) orelse return;
-        const binary_path_c = try utils.convertUritoPath(self.allocator, binary_uri_c);
-        defer self.allocator.free(binary_path_c);
-        std.debug.print("binary_path_c {s}\n", .{binary_path_c});
-
-        const bundle_uri_c = c.lilv_node_as_uri(c.lilv_ui_get_bundle_uri(ui.?)) orelse return;
-        const bundle_path_c = try utils.convertUritoPath(self.allocator, bundle_uri_c);
-        defer self.allocator.free(bundle_path_c);
-        std.debug.print("bundle_path_c {s}\n", .{bundle_path_c});
-
-        // suil host
-        const host = c.suil_host_new(uiWrite, uiIndex, uiSubscribe, uiUnsubscribe) orelse return;
-        defer c.suil_host_free(host);
-
-        // ExternalUI needs the external-ui host feature so it can notify closure (optional but good)
-        var ext_host = LV2_External_UI_Host{ .ui_closed = on_ui_closed }; // set callback if you want
-        const ext_host_feat = c.LV2_Feature{
-            .URI = "http://kxstudio.sf.net/ns/lv2ext/external-ui#Host",
-            .data = &ext_host,
-        };
-
-        const lv2_handle = c.lilv_instance_get_handle(self.instance) orelse return error.NoInstanceHandle;
-
-        // Required: instance-access -> pass LV2_Handle from the DSP instance
-        const instance_access_feat = c.LV2_Feature{
-            .URI = "http://lv2plug.in/ns/ext/instance-access",
-            .data = lv2_handle,
-        };
-
-        var features: [3]?*const c.LV2_Feature = .{ &ext_host_feat, &instance_access_feat, null };
-
-        var session = UiSession{ .plugin = self }; // lives until showUI returns
-
-        const inst = c.suil_instance_new(
-            host,
-            &session, // controller
-            null, // container_type_uri (none for ExternalUI)
-            plugin_uri_c,
-            ui_uri_c,
-            ui_type_uri_c,
-            bundle_path_c, // *** filesystem path ***
-            binary_path_c, // *** filesystem path ***
-            &features,
-        ) orelse {
-            // suil prints an error already; add context:
-            std.log.err("suil_instance_new failed for UI {s} in {s}", .{ cstrZ(ui_uri_c), cstrZ(binary_path_c) });
-            return;
-        };
-        defer c.suil_instance_free(inst);
-
-        // Show and idle the UI (ExternalUI opens its own window)
-        // c.suil_instance_show(inst);
-        // 1) Get the UI widget and handle from suil
-        const widget_ptr = c.suil_instance_get_widget(inst); // void*
-        // const ui_handle = c.suil_instance_get_handle(inst); // LV2UI_Handle (void*)
-
-        const ext = asExt(widget_ptr);
-
-        // Show window
-        std.debug.print("Show UI\n", .{});
-        session.closed.store(false, .seq_cst);
-        ext.show.?(ext);
-        defer ext.hide.?(ext);
-
-        // Pump until UI tells us it closed
-        while (!session.closed.load(.seq_cst)) {
-            ext.run.?(ext);
-            // std.Thread.sleep(16 * std.time.ns_per_ms); // ~60 Hz tick
-            std.Thread.sleep(32 * std.time.ns_per_ms); // ~30 Hz tick
-        }
+    pub fn showUI(self: *Self) !*UiSession {
+        self.session.plugin = self;
+        try self.session.init();
+        return &self.session;
     }
 
     fn listUIs(self: *Self) !void {
@@ -588,9 +496,124 @@ fn asExt(widget_ptr: ?*anyopaque) *LV2_External_UI_Widget {
     return @as(*LV2_External_UI_Widget, @ptrCast(aligned));
 }
 
-const UiSession = struct {
+pub const UiSession = struct {
     closed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     plugin: *SynthPlugin,
+    ext: *LV2_External_UI_Widget,
+    suil_instance: *c.SuilInstance,
+
+    host: *c.SuilHost,
+    ext_host: LV2_External_UI_Host,
+    ext_host_feat: c.LV2_Feature,
+    instance_access_feat: c.LV2_Feature,
+    features: [3]?*const c.LV2_Feature,
+
+    pub fn init(self: *UiSession) !void {
+        const synth_plugin = self.plugin;
+        const world = synth_plugin.world;
+        const plugin = synth_plugin.plugin;
+
+        const ext_ui_class = c.lilv_new_uri(world, "http://kxstudio.sf.net/ns/lv2ext/external-ui#Widget");
+        // defer c.lilv_node_free(ext_ui_class);
+
+        try synth_plugin.listUIs();
+
+        // pick ExternalUI
+        const uis = c.lilv_plugin_get_uis(plugin);
+        var it = c.lilv_uis_begin(uis);
+        var ui: ?*const c.LilvUI = null;
+        while (!c.lilv_uis_is_end(uis, it)) : (it = c.lilv_uis_next(uis, it)) {
+            const u = c.lilv_uis_get(uis, it);
+            if (c.lilv_ui_is_a(u, ext_ui_class)) {
+                ui = u;
+                break;
+            }
+        }
+        if (ui == null) return error.NoExternalUiFound;
+
+        // Required strings
+        const plugin_uri_c = c.lilv_node_as_uri(synth_plugin.plugin_uri); // plugin URI
+        const ui_uri_c = c.lilv_node_as_uri(c.lilv_ui_get_uri(ui.?)); // selected UI URI
+        const ui_type_uri_c = "http://kxstudio.sf.net/ns/lv2ext/external-ui#Widget";
+
+        // Convert bundle/bin URIs → filesystem paths
+        const binary_uri_c = c.lilv_node_as_uri(c.lilv_ui_get_binary_uri(ui.?)) orelse return error.SomeError;
+        const binary_path_c = try utils.convertUritoPath(synth_plugin.allocator, binary_uri_c);
+        defer synth_plugin.allocator.free(binary_path_c);
+        std.debug.print("binary_path_c {s}\n", .{binary_path_c});
+
+        const bundle_uri_c = c.lilv_node_as_uri(c.lilv_ui_get_bundle_uri(ui.?)) orelse return error.SomeError;
+        const bundle_path_c = try utils.convertUritoPath(synth_plugin.allocator, bundle_uri_c);
+        defer synth_plugin.allocator.free(bundle_path_c);
+        std.debug.print("bundle_path_c {s}\n", .{bundle_path_c});
+
+        // suil host
+        self.host = c.suil_host_new(uiWrite, uiIndex, uiSubscribe, uiUnsubscribe) orelse return error.SomeError;
+        errdefer c.suil_host_free(self.host);
+
+        // ExternalUI needs the external-ui host feature so it can notify closure (optional but good)
+        self.ext_host = LV2_External_UI_Host{ .ui_closed = on_ui_closed }; // set callback if you want
+        self.ext_host_feat = c.LV2_Feature{
+            .URI = "http://kxstudio.sf.net/ns/lv2ext/external-ui#Host",
+            .data = &self.ext_host,
+        };
+
+        const lv2_handle = c.lilv_instance_get_handle(synth_plugin.instance) orelse return error.NoInstanceHandle;
+
+        // Required: instance-access -> pass LV2_Handle from the DSP instance
+        self.instance_access_feat = c.LV2_Feature{
+            .URI = "http://lv2plug.in/ns/ext/instance-access",
+            .data = lv2_handle,
+        };
+
+        self.features = .{ &self.ext_host_feat, &self.instance_access_feat, null };
+
+        const suil_instance = c.suil_instance_new(
+            self.host,
+            self, // controller
+            null, // container_type_uri (none for ExternalUI)
+            plugin_uri_c,
+            ui_uri_c,
+            ui_type_uri_c,
+            bundle_path_c, // *** filesystem path ***
+            binary_path_c, // *** filesystem path ***
+            &self.features,
+        ) orelse {
+            // suil prints an error already; add context:
+            std.log.err("suil_instance_new failed for UI {s} in {s}", .{ cstrZ(ui_uri_c), cstrZ(binary_path_c) });
+            return error.SomeError;
+        };
+        errdefer c.suil_instance_free(suil_instance);
+
+        self.suil_instance = suil_instance;
+
+        const widget_ptr = c.suil_instance_get_widget(suil_instance); // void*
+
+        const ext = asExt(widget_ptr);
+        self.ext = ext;
+
+        // Show window
+        std.debug.print("Show UI\n", .{});
+        self.closed.store(false, .seq_cst);
+        ext.show.?(ext);
+    }
+
+    pub fn waitUntilClosed(self: *UiSession) void {
+        defer c.suil_host_free(self.host);
+        defer c.suil_instance_free(self.suil_instance);
+
+        const ext = self.ext;
+        defer ext.hide.?(ext);
+
+        // Pump until UI tells us it closed
+        while (!self.closed.load(.seq_cst)) {
+            // ext.run.?(ext);
+            // std.Thread.sleep(16 * std.time.ns_per_ms); // ~60 Hz tick
+            std.Thread.sleep(32 * std.time.ns_per_ms); // ~30 Hz tick
+        }
+
+        std.debug.print("UI Closed\n", .{});
+    }
 };
 
 // Called by the UI when it closes its window
