@@ -6,9 +6,8 @@ const pa = @cImport({
     @cInclude("portaudio.h");
 });
 
-const synth_plugin_mod = @import("synth_plugin.zig");
+const synth_plugin_mod = @import("lv2/synth_plugin.zig");
 const SynthPlugin = synth_plugin_mod.SynthPlugin;
-const create_world = @import("synth_plugin.zig").create_world;
 const MidiInput = @import("./midi_input.zig").MidiInput;
 
 const freq = 440.0; // A4 note
@@ -176,7 +175,7 @@ pub fn main() !void {
 
     const allocator = std.heap.page_allocator;
 
-    const world = create_world();
+    const world = synth_plugin_mod.create_world();
     // defer c.lilv_world_free(world.?);
 
     // c.lilv_world_load_all(world.?);

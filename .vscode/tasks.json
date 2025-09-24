@@ -40,11 +40,9 @@
             "type": "shell",
             "command": "zig",
             "args": [
+                "build",
                 "test",
-                "-lc",
-                "-llilv-0",
-                "-lportmidi",
-                "${file}"
+                "-Donly=\"${relativeFile}\"",
             ],
             "group": {
                 "kind": "build",

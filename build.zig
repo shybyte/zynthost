@@ -21,27 +21,6 @@ pub fn build(b: *std.Build) void {
     // target and optimize options) will be listed when running `zig build --help`
     // in this directory.
 
-    // This creates a module, which represents a collection of source files alongside
-    // some compilation options, such as optimization mode and linked system libraries.
-    // Zig modules are the preferred way of making Zig code available to consumers.
-    // addModule defines a module that we intend to make available for importing
-    // to our consumers. We must give it a name because a Zig package can expose
-    // multiple modules and consumers will need to be able to specify which
-    // module they want to access.
-    const mod = b.addModule("zynthost", .{
-        // The root source file is the "entry point" of this module. Users of
-        // this module will only be able to access public declarations contained
-        // in this file, which means that if you have declarations that you
-        // intend to expose to consumers that were defined in other files part
-        // of this module, you will have to make sure to re-export them from
-        // the root file.
-        .root_source_file = b.path("src/root.zig"),
-
-        // Later on we'll use this module as the root module of a test executable
-        // which requires us to specify a target.
-        .target = target,
-    });
-
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
     // to the module defined above, it's sometimes preferable to split business
@@ -71,16 +50,6 @@ pub fn build(b: *std.Build) void {
             // definition if desireable (e.g. firmware for embedded devices).
             .target = target,
             .optimize = optimize,
-            // List of modules available for import in source files part of the
-            // root module.
-            .imports = &.{
-                // Here "zynthost" is the name you will use in your source code to
-                // import this module (e.g. `@import("zynthost")`). The name is
-                // repeated because you are allowed to rename your imports, which
-                // can be extremely useful in case of collisions (which can happen
-                // importing modules from different packages).
-                .{ .name = "zynthost", .module = mod },
-            },
         }),
     });
 
@@ -126,13 +95,16 @@ pub fn build(b: *std.Build) void {
     // make the two of them run in parallel.
     const test_step = b.step("test", "Run tests");
 
+    // 1) Collect filters from a -D option:
+    //    usage: zig build test -Dtest-filter="MidiInput" -Dtest-filter="Other"
+    const test_filters =
+        b.option([]const []const u8, "test-filter", "Run only tests whose name contains any of these substrings") orelse &.{};
+
+    const only = b.option([]const u8, "only", "Import exactly file for tests");
+
     // List of files containing tests
     const test_files = &[_][]const u8{
-        "src/midi_sequence.zig",
-        "src/midi_input.zig",
-        "src/synth_plugin.zig",
-        "src/main.zig",
-        "src/root.zig",
+        "src/tests.zig",
     };
 
     // Loop through the test files and create test executables for each
@@ -143,11 +115,16 @@ pub fn build(b: *std.Build) void {
                 .target = target,
                 .optimize = optimize,
             }),
+            .filters = test_filters,
         });
 
         test_exe.linkSystemLibrary("lilv-0");
         test_exe.linkSystemLibrary("portaudio");
         test_exe.linkSystemLibrary("portmidi");
+
+        const cfg = b.addOptions();
+        cfg.addOption(?[]const u8, "only", only);
+        test_exe.root_module.addOptions("cfg", cfg);
 
         const run_test_exe = b.addRunArtifact(test_exe);
         test_step.dependOn(&run_test_exe.step);
