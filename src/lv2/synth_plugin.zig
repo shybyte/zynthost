@@ -598,19 +598,16 @@ pub const UiSession = struct {
         ext.show.?(ext);
     }
 
-    pub fn waitUntilClosed(self: *UiSession) void {
-        defer c.suil_host_free(self.host);
-        defer c.suil_instance_free(self.suil_instance);
+    pub fn isClosed(self: *UiSession) bool {
+        return self.closed.load(.seq_cst);
+    }
+
+    pub fn deinit(self: *UiSession) void {
+        c.suil_host_free(self.host);
+        c.suil_instance_free(self.suil_instance);
 
         const ext = self.ext;
-        defer ext.hide.?(ext);
-
-        // Pump until UI tells us it closed
-        while (!self.closed.load(.seq_cst)) {
-            // ext.run.?(ext);
-            // std.Thread.sleep(16 * std.time.ns_per_ms); // ~60 Hz tick
-            std.Thread.sleep(32 * std.time.ns_per_ms); // ~30 Hz tick
-        }
+        ext.hide.?(ext);
 
         std.debug.print("UI Closed\n", .{});
     }

@@ -9,7 +9,7 @@ const freq = 440.0; // A4 note
 const sample_rate = 44100;
 const volume: f32 = 0.1; // Set desired output volume (0.0 to 1.0)
 
-const State = struct { phase: f64 = 0.0, synth_plugin: *SynthPlugin, midi_input: *MidiInput };
+const State = struct { phase: f64 = 0.0, synth_plugins: []*SynthPlugin, midi_input: *MidiInput };
 
 fn audioCallback(
     input: ?*const anyopaque,
@@ -31,23 +31,30 @@ fn audioCallback(
     }
 
     const midi_events = data.midi_input.poll();
-    for (midi_events) |midi_event| {
-        var buf: [4]u8 = undefined;
-        std.mem.writeInt(u32, &buf, midi_event, .little);
-        std.debug.print("MidiMessage: {any}\n", .{buf[0..3]});
-        data.synth_plugin.midi_sequence.addEvent(0, buf[0..3]);
-    }
 
-    data.synth_plugin.run(@intCast(frameCount));
+    for (data.synth_plugins) |synth_plugin| {
+        for (midi_events) |midi_event| {
+            var buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &buf, midi_event, .little);
+            std.debug.print("MidiMessage: {any}\n", .{buf[0..3]});
+            synth_plugin.midi_sequence.addEvent(0, buf[0..3]);
+        }
+
+        synth_plugin.run(@intCast(frameCount));
+    }
 
     for (0..frameCount) |i| {
         var value_sum: f32 = 0.0;
 
-        for (data.synth_plugin.audio_ports.items) |audio_port_index| {
-            value_sum += data.synth_plugin.audio_out_bufs[audio_port_index].?[i];
+        for (data.synth_plugins) |synth_plugin| {
+            var value_sum_synth: f32 = 0.0;
+            for (synth_plugin.audio_ports.items) |audio_port_index| {
+                value_sum_synth += synth_plugin.audio_out_bufs[audio_port_index].?[i];
+            }
+            value_sum += value_sum_synth / @as(f32, @floatFromInt(synth_plugin.audio_ports.items.len)) * 0.5;
         }
 
-        out[i] = value_sum / @as(f32, @floatFromInt(data.synth_plugin.audio_ports.items.len)) * 0.5;
+        out[i] = value_sum / @as(f32, @floatFromInt(data.synth_plugins.len));
     }
 
     return audio_output.paContinue;
@@ -66,9 +73,22 @@ pub fn main() !void {
     const world = try synth_plugin_mod.create_world(allocator);
     defer synth_plugin_mod.free_world();
 
-    // var synth_plugin = try SynthPlugin.init(allocator, world, "https://surge-synthesizer.github.io/lv2/surge-xt");
-    var synth_plugin = try SynthPlugin.init(allocator, world, "http://tytel.org/helm");
-    defer synth_plugin.deinit();
+    // const synths = [_][:0]const u8{ "http://tytel.org/helm", "https://surge-synthesizer.github.io/lv2/surge-xt" };
+    const synths = [_][:0]const u8{"http://tytel.org/helm"};
+    // const synths = [_][:0]const u8{"https://surge-synthesizer.github.io/lv2/surge-xt"};
+
+    var plugins = try allocator.alloc(*SynthPlugin, synths.len);
+    defer allocator.free(plugins);
+
+    for (synths, plugins) |synth, *slot| {
+        slot.* = try SynthPlugin.init(allocator, world, synth);
+    }
+
+    defer {
+        for (plugins) |plugin| {
+            plugin.deinit();
+        }
+    }
 
     // const plugin_patch_filename = "patches/plugin_patch.json";
     // synth_plugin.loadState("/tmp", "test.ttl") catch |err| {
@@ -79,15 +99,24 @@ pub fn main() !void {
     defer midi_input.deinit();
 
     var state = State{
-        .synth_plugin = synth_plugin,
+        .synth_plugins = plugins,
         .midi_input = &midi_input,
     };
 
     try audio_output.startAudio(&state, audioCallback);
     defer audio_output.stopAudio();
 
-    const session = try synth_plugin.showUI();
-    session.waitUntilClosed();
+    for (plugins) |plugin| {
+        _ = try plugin.showUI();
+    }
+
+    while (!plugins[0].session.isClosed()) {
+        std.Thread.sleep(100 * std.time.ns_per_ms);
+    }
+
+    for (plugins) |plugin| {
+        plugin.session.deinit();
+    }
 
     // try synth_plugin.saveState();
 
