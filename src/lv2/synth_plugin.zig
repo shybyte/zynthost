@@ -40,8 +40,6 @@ pub const SynthPlugin = struct {
         world: *c.LilvWorld,
         plugin_uri_string: [*:0]const u8, // already a valid C string
     ) !*Self {
-
-        // Allocate the plugin struct first
         const self = try allocator.create(SynthPlugin);
         errdefer allocator.destroy(self);
 
@@ -49,21 +47,12 @@ pub const SynthPlugin = struct {
         self.world = world;
         self.audio_ports = try std.ArrayList(usize).initCapacity(allocator, 100);
 
-        // Ensure plugin list exists
         const plugins = c.lilv_world_get_all_plugins(world);
         if (plugins == null) return error.NoPlugins;
 
         self.plugin_uri = c.lilv_new_uri(world, plugin_uri_string) orelse return error.BadPluginUri;
         self.plugin = c.lilv_plugins_get_by_uri(plugins, self.plugin_uri) orelse return error.PluginNotFound;
 
-        // ----------------------------
-        // 2) Provide LV2_URID_Map feature
-        // ----------------------------
-        try initUridTable(allocator); // initializes global URI→URID map used by the C callback
-
-        // ----------------------------
-        // 3) Instantiate the plugin
-        // ----------------------------
         self.instance = c.lilv_plugin_instantiate(self.plugin, sample_rate, &urid_map_features);
         if (self.instance == null) return error.InstanceFailed;
 
@@ -689,13 +678,22 @@ var urid_map_features = [_]?*const c.LV2_Feature{
     null, // terminator
 };
 
-pub fn create_world() ?*c.LilvWorld {
-    const world = c.lilv_world_new();
-    errdefer c.lilv_world_free(world.?);
+var world_global: *c.LilvWorld = undefined;
 
-    c.lilv_world_load_all(world.?);
+pub fn create_world(allocator: std.mem.Allocator) !*c.LilvWorld {
+    world_global = c.lilv_world_new() orelse return error.LilvWorldNewFailed;
+    errdefer free_world();
 
-    return world;
+    c.lilv_world_load_all(world_global);
+
+    try initUridTable(allocator); // initializes global URI→URID map used by the C callback
+
+    return world_global;
+}
+
+pub fn free_world() void {
+    c.lilv_world_free(world_global);
+    deinitUridTable();
 }
 
 fn listPlugins(world: *c.LilvWorld) void {
@@ -763,23 +761,19 @@ fn listPlugins(world: *c.LilvWorld) void {
         std.debug.print("\n", .{});
     }
 }
-
 // ---- Tests ----
 
 test "SynthPlugin initialization and deinitialization" {
-    // Use the built-in testing allocator
     const allocator = std.testing.allocator;
 
-    const world = create_world();
-    try std.testing.expect(world != null);
-    defer c.lilv_world_free(world.?);
+    const world = try create_world(allocator);
+    defer free_world();
 
     // listPlugins(world.?);
 
     // Initialize with a known valid C string literal
-    var synth_plugin = try SynthPlugin.init(allocator, world.?, "https://surge-synthesizer.github.io/lv2/surge-xt");
+    var synth_plugin = try SynthPlugin.init(allocator, world, "https://surge-synthesizer.github.io/lv2/surge-xt");
     defer synth_plugin.deinit();
-    defer deinitUridTable();
 
     try synth_plugin.saveState();
     try synth_plugin.loadState("/tmp", "test.ttl");
