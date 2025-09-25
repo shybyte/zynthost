@@ -5,6 +5,7 @@ const SynthPlugin = synth_plugin_mod.SynthPlugin;
 const MidiInput = @import("./midi_input.zig").MidiInput;
 const audio_output = @import("./audio_output.zig");
 const patch_mod = @import("./patch.zig");
+const loadAppConfigWithFallback = @import("./config.zig").loadAppConfigWithFallback;
 
 const freq = 440.0; // A4 note
 const sample_rate = 44100;
@@ -103,7 +104,10 @@ pub fn main() !void {
         }
     }
 
-    var midi_input = try MidiInput.init(std.heap.page_allocator);
+    const app_config = try loadAppConfigWithFallback(allocator);
+    defer app_config.deinit();
+
+    var midi_input = try MidiInput.init(std.heap.page_allocator, app_config.value.midi_name_filter);
     defer midi_input.deinit();
 
     var state = State{
@@ -149,8 +153,6 @@ pub fn main() !void {
     for (plugins) |plugin| {
         plugin.session.deinit();
     }
-
-    // try synth_plugin.saveState();
 
     std.debug.print("Finished.\n", .{});
 }

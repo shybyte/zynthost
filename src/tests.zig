@@ -18,6 +18,7 @@ test {
     } else {
         // Default: import them all
         _ = @import("midi.zig");
+        _ = @import("config.zig");
         _ = @import("midi_input.zig");
         _ = @import("lv2/midi_sequence.zig");
         _ = @import("lv2/synth_plugin.zig");

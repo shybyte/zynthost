@@ -19,7 +19,7 @@ pub const MidiInput = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator) !Self {
+    pub fn init(allocator: std.mem.Allocator, name_filter_opt: ?[]const u8) !Self {
         if (c.Pm_Initialize() != c.pmNoError) return error.PortMidiInitFailed;
         errdefer _ = c.Pm_Terminate();
 
@@ -38,7 +38,6 @@ pub const MidiInput = struct {
         }
 
         // Enumerate input devices and open them
-        var any_opened = false;
         for (0..@intCast(dev_count)) |i| {
             const info = c.Pm_GetDeviceInfo(@intCast(i)) orelse continue;
             if (info.*.input == 0) continue; // Filter for input devices
@@ -46,6 +45,12 @@ pub const MidiInput = struct {
             const name = std.mem.sliceTo(info.*.name, 0);
             const interf = std.mem.sliceTo(info.*.interf, 0);
             std.debug.print("Input #{d}: {s} ({s})\n", .{ i, name, interf });
+
+            if (name_filter_opt) |name_filter| {
+                if (!std.mem.containsAtLeast(u8, name, 1, name_filter)) {
+                    continue;
+                }
+            }
 
             var stream: *c.PmStream = undefined;
             const err = c.Pm_OpenInput(@ptrCast(&stream), @intCast(i), null, 1024, null, null);
@@ -62,12 +67,6 @@ pub const MidiInput = struct {
                 .id = @intCast(i),
                 .stream = stream,
             });
-            any_opened = true;
-        }
-
-        if (!any_opened) {
-            std.debug.print("No openable MIDI INPUT devices.\n", .{});
-            return error.NopOpenableMidiInputDevices;
         }
 
         std.debug.print("Listening on {d} input stream(s). Ctrl+C to quit.\n", .{streams.items.len});
@@ -149,7 +148,27 @@ fn print_midi(device_name: []const u8, ts_ms: i64, msg: u32) void {
 
 test "MidiInput" {
     const allocator = std.testing.allocator;
-    var midi_input = try MidiInput.init(allocator);
-    _ = midi_input.poll();
+
+    var midi_input = try MidiInput.init(allocator, null);
     defer midi_input.deinit();
+
+    try std.testing.expect(midi_input.streams.items.len >= 0);
+
+    _ = midi_input.poll();
+
+    {
+        var midi_input_filtered = try MidiInput.init(allocator, "Eierkuchen");
+        defer midi_input_filtered.deinit();
+
+        try std.testing.expect(midi_input_filtered.streams.items.len >= 0);
+    }
+
+    {
+        const midi_device_name = midi_input.streams.items[0].name;
+        const name_part = midi_device_name[1 .. midi_device_name.len - 1];
+        var midi_input_filtered = try MidiInput.init(allocator, name_part);
+        defer midi_input_filtered.deinit();
+
+        try std.testing.expectEqual(midi_input_filtered.streams.items.len, midi_input_filtered.streams.items.len);
+    }
 }
