@@ -1,0 +1,11 @@
+{
+    "channels": [
+        {
+            "plugins": [
+                {
+                    "uri": "https://surge-synthesizer.github.io/lv2/surge-xt"
+                }
+            ]
+        }
+    ]
+}

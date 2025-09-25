@@ -1,4 +1,5 @@
 const std = @import("std");
+const MidiMessage = @import("./midi.zig").MidiMessage;
 
 // PortMidi C API
 const c = @cImport({
@@ -14,7 +15,7 @@ const StreamRec = struct {
 pub const MidiInput = struct {
     allocator: std.mem.Allocator,
     streams: std.ArrayList(StreamRec),
-    midi_events: std.ArrayList(u32),
+    midi_events: std.ArrayList(MidiMessage),
 
     const Self = @This();
 
@@ -74,7 +75,7 @@ pub const MidiInput = struct {
         return Self{
             .allocator = allocator,
             .streams = streams,
-            .midi_events = try std.ArrayList(u32).initCapacity(allocator, 100),
+            .midi_events = try std.ArrayList(MidiMessage).initCapacity(allocator, 100),
         };
     }
 
@@ -88,7 +89,7 @@ pub const MidiInput = struct {
         defer _ = c.Pm_Terminate();
     }
 
-    pub fn poll(self: *Self) []const u32 {
+    pub fn poll(self: *Self) []const MidiMessage {
         self.midi_events.clearRetainingCapacity();
 
         for (self.streams.items) |s| {
@@ -103,8 +104,13 @@ pub const MidiInput = struct {
                         const e = evs[j];
                         const ts_ms: i64 = @intCast(e.timestamp);
                         const msg: u32 = @bitCast(e.message);
+
                         print_midi(s.name, ts_ms, msg);
-                        self.midi_events.appendAssumeCapacity(msg);
+                        // std.debug.print("midi ${x:0>8}\n", .{msg});
+
+                        self.midi_events.appendAssumeCapacity(.{
+                            .data = @as([3]u8, @bitCast(@as(u24, @truncate(msg)))),
+                        });
                     }
                 }
             }

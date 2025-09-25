@@ -33,12 +33,12 @@ fn audioCallback(
 
     const midi_events = data.midi_input.poll();
 
-    for (data.synth_plugins) |synth_plugin| {
+    for (data.synth_plugins, 0..) |synth_plugin, channel| {
         for (midi_events) |midi_event| {
-            var buf: [4]u8 = undefined;
-            std.mem.writeInt(u32, &buf, midi_event, .little);
-            std.debug.print("MidiMessage: {any}\n", .{buf[0..3]});
-            synth_plugin.midi_sequence.addEvent(0, buf[0..3]);
+            if (midi_event.channel() == channel) {
+                std.debug.print("MidiMessage: {f}\n", .{midi_event});
+                synth_plugin.midi_sequence.addEvent(0, &midi_event.data);
+            }
         }
 
         synth_plugin.run(@intCast(frameCount));
