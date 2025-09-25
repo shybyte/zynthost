@@ -4,6 +4,7 @@ const synth_plugin_mod = @import("lv2/synth_plugin.zig");
 const SynthPlugin = synth_plugin_mod.SynthPlugin;
 const MidiInput = @import("./midi_input.zig").MidiInput;
 const audio_output = @import("./audio_output.zig");
+const patch_mod = @import("./patch.zig");
 
 const freq = 440.0; // A4 note
 const sample_rate = 44100;
@@ -70,20 +71,24 @@ pub fn main() !void {
     }
     const allocator = gpa.allocator();
 
+    const args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args); // free what argsAlloc allocated
+
+    const patch_file_name = if (args.len == 2) args[1] else return error.MissingFileName;
+
+    std.debug.print("Load patch {s} ...", .{patch_file_name});
+    const patch = try patch_mod.loadPatch(allocator, patch_file_name);
+    defer patch.deinit();
+    std.debug.print(" successfully.", .{});
+
     const world = try synth_plugin_mod.create_world(allocator);
     defer synth_plugin_mod.free_world();
 
-    // const synths = [_][:0]const u8{ "http://tytel.org/helm", "https://surge-synthesizer.github.io/lv2/surge-xt" };
-    const synths = [_][:0]const u8{"http://tytel.org/helm"};
-    // const synths = [_][:0]const u8{"https://surge-synthesizer.github.io/lv2/surge-xt"};
-
-    var plugins = try allocator.alloc(*SynthPlugin, synths.len);
-    defer allocator.free(plugins);
-
-    for (synths, plugins) |synth, *slot| {
-        slot.* = try SynthPlugin.init(allocator, world, synth);
+    var plugins = try allocator.alloc(*SynthPlugin, patch.value.channels.len);
+    for (patch.value.channels, 0..) |channel, i| {
+        plugins[i] = try SynthPlugin.init(allocator, world, channel.plugins[0].uri);
     }
-
+    defer allocator.free(plugins);
     defer {
         for (plugins) |plugin| {
             plugin.deinit();

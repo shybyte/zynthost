@@ -1,0 +1,11 @@
+{
+    "channels": [
+        {
+            "plugins": [
+                {
+                    "uri": "http://tytel.org/helm"
+                }
+            ]
+        }
+    ]
+}

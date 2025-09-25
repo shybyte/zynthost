@@ -10,6 +10,8 @@ test {
             _ = @import("lv2/midi_sequence.zig");
         } else if (std.mem.endsWith(u8, p, "lv2/synth_plugin.zig")) {
             _ = @import("lv2/synth_plugin.zig");
+        } else if (std.mem.endsWith(u8, p, "patch.zig")) {
+            _ = @import("patch.zig");
         } else {
             @compileError("unknown -Donly value: " ++ p);
         }
@@ -18,5 +20,6 @@ test {
         _ = @import("midi_input.zig");
         _ = @import("lv2/midi_sequence.zig");
         _ = @import("lv2/synth_plugin.zig");
+        _ = @import("patch.zig");
     };
 }

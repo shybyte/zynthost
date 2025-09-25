@@ -1,0 +1,18 @@
+{
+    "channels": [
+        {
+            "plugins": [
+                {
+                    "uri": "http://tytel.org/helm"
+                }
+            ]
+        },
+        {
+            "plugins": [
+                {
+                    "uri": "https://surge-synthesizer.github.io/lv2/surge-xt"
+                }
+            ]
+        }
+    ]
+}

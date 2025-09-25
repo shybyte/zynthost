@@ -7,7 +7,28 @@
             "command": "zig",
             "args": [
                 "build",
-                "run"
+                "run",
+                "--",
+                "patches/demo/one-synth.json"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            }
+        },
+        {
+            "label": "Run main with 2 synths",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "run",
+                "--",
+                "patches/demo/two-synths.json"
             ],
             "group": {
                 "kind": "build",
@@ -43,6 +64,24 @@
                 "build",
                 "test",
                 "-Donly=\"${relativeFile}\"",
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [],
+            "detail": "Run the Zig tests defined in the current file",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            }
+        },
+        {
+            "label": "Run simple tests in current file",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "test",
+                "${relativeFile}",
             ],
             "group": {
                 "kind": "build",
