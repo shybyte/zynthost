@@ -235,17 +235,19 @@ pub const SynthPlugin = struct {
         // std.debug.print("Test {any}\n", .{self.instance});
     }
 
-    pub fn saveState(self: *Self) !void {
-        const path = "/tmp";
+    pub fn saveState(self: *Self, file_path: []const u8) !void {
+        const dir = try std.heap.page_allocator.dupeZ(u8, std.fs.path.dirname(file_path) orelse "");
+
+        std.debug.print("saveState {s} {s}\n", .{ dir, file_path });
 
         const state = c.lilv_state_new_from_instance(
             self.plugin,
             self.instance,
             &urid_map, // LV2_URID_Map*
-            path,
-            path,
-            path,
-            path,
+            dir,
+            dir,
+            dir,
+            dir,
             null,
             null,
             0,
@@ -267,8 +269,8 @@ pub const SynthPlugin = struct {
             &urid_un_map,
             state,
             null, // uri for the state (optional, host-specific)
-            path,
-            "test.ttl",
+            dir,
+            @ptrCast(std.fs.path.basename(file_path)),
         );
         if (ok != 0) {
             return error.SaveFailed;
@@ -277,12 +279,10 @@ pub const SynthPlugin = struct {
         std.debug.print("Successfully saved LV2 state from instance.\n", .{});
     }
 
-    pub fn loadState(self: *Self, dir: [*:0]const u8, filename: [*:0]const u8) !void {
-        const path = "/tmp/test.ttl";
-
-        const file = std.fs.cwd().openFile(path, .{}) catch |err| switch (err) {
+    pub fn loadState(self: *Self, file_path: [:0]const u8) !void {
+        const file = std.fs.cwd().openFile(file_path, .{}) catch |err| switch (err) {
             error.FileNotFound => {
-                std.debug.print("File '{s}' does not exist.\n", .{path});
+                std.debug.print("File '{s}' does not exist.\n", .{file_path});
                 return;
             },
             else => return err, // propagate other errors
@@ -293,11 +293,11 @@ pub const SynthPlugin = struct {
             self.world,
             &urid_map,
             null,
-            "/tmp/test.ttl",
+            file_path,
         );
 
         if (state == null) {
-            std.debug.print("Failed to load LV2 state from {s}/{s}\n", .{ std.mem.span(dir), std.mem.span(filename) });
+            std.debug.print("Failed to load LV2 state from {s}\n", .{file_path});
             return error.StateLoadFailed;
         }
 
@@ -318,7 +318,7 @@ pub const SynthPlugin = struct {
         // Reactivate either way; bail on error
         c.lilv_instance_activate(self.instance);
 
-        std.debug.print("Successfully restored LV2 state from {s}/{s}\n", .{ std.mem.span(dir), std.mem.span(filename) });
+        std.debug.print("Successfully restored LV2 state from {s}\n", .{file_path});
     }
 
     pub fn deinit(self: *Self) void {
@@ -795,8 +795,8 @@ test "SynthPlugin initialization and deinitialization" {
     var synth_plugin = try SynthPlugin.init(allocator, world, "https://surge-synthesizer.github.io/lv2/surge-xt");
     defer synth_plugin.deinit();
 
-    try synth_plugin.saveState();
-    try synth_plugin.loadState("/tmp", "test.ttl");
+    try synth_plugin.saveState("patches/tmp/patch.ttl");
+    try synth_plugin.loadState("patches/tmp/patch.ttl");
 
     try std.testing.expectEqual(2, synth_plugin.audio_ports.items.len);
     try std.testing.expectEqual(5, synth_plugin.audio_ports.items[0]);

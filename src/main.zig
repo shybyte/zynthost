@@ -86,7 +86,15 @@ pub fn main() !void {
 
     var plugins = try allocator.alloc(*SynthPlugin, patch.value.channels.len);
     for (patch.value.channels, 0..) |channel, i| {
-        plugins[i] = try SynthPlugin.init(allocator, world, channel.plugins[0].uri);
+        const plugin = try SynthPlugin.init(allocator, world, channel.plugins[0].uri);
+
+        const plugin_patch_file_name = try patch_mod.get_plugin_patch_file_name(allocator, patch_file_name, @intCast(i));
+        defer allocator.free(plugin_patch_file_name);
+        plugin.loadState(plugin_patch_file_name) catch |err| {
+            std.debug.print("Failed to load plugin patch {}\n", .{err});
+        };
+
+        plugins[i] = plugin;
     }
     defer allocator.free(plugins);
     defer {
@@ -94,11 +102,6 @@ pub fn main() !void {
             plugin.deinit();
         }
     }
-
-    // const plugin_patch_filename = "patches/plugin_patch.json";
-    // synth_plugin.loadState("/tmp", "test.ttl") catch |err| {
-    //     std.debug.print("Failed to load plugin patch {}\n", .{err});
-    // };
 
     var midi_input = try MidiInput.init(std.heap.page_allocator);
     defer midi_input.deinit();
@@ -115,8 +118,32 @@ pub fn main() !void {
         _ = try plugin.showUI();
     }
 
-    while (!plugins[0].session.isClosed()) {
-        std.Thread.sleep(100 * std.time.ns_per_ms);
+    // while (!plugins[0].session.isClosed()) {
+    //     std.Thread.sleep(100 * std.time.ns_per_ms);
+    // }
+
+    var stdin_file = std.fs.File.stdin();
+    var read_buffer: [1024]u8 = undefined;
+    var reader = stdin_file.reader(&read_buffer);
+
+    while (true) {
+        const line = try reader.interface.takeDelimiterExclusive('\n');
+        if (line.len == 0) break; // EOF
+
+        const trimmed = std.mem.trimRight(u8, line, "\r\n");
+
+        if (std.mem.eql(u8, trimmed, "s")) {
+            std.debug.print("Saving ... \n", .{});
+            for (plugins, 0..) |plugin, channel| {
+                const plugin_patch_file_name = try patch_mod.get_plugin_patch_file_name(allocator, patch_file_name, @intCast(channel));
+                defer allocator.free(plugin_patch_file_name);
+                try plugin.saveState(plugin_patch_file_name);
+            }
+        }
+
+        if (std.mem.eql(u8, trimmed, "q")) break;
+
+        std.debug.print("You entered: \"{s}\"\n", .{trimmed});
     }
 
     for (plugins) |plugin| {

@@ -59,6 +59,25 @@
             }
         },
         {
+            "label": "Run main with no synth",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "run",
+                "--",
+                "patches/demo/empty.json"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            }
+        },
+        {
             "label": "Run tests",
             "type": "shell",
             "command": "zig",

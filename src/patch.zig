@@ -21,7 +21,32 @@ pub fn loadPatch(
     return std.json.parseFromSlice(PatchConfig, allocator, file_content, .{});
 }
 
+// Example: (patchname.json,1) => patchname-channel-1.ttl
+pub fn get_plugin_patch_file_name(
+    allocator: std.mem.Allocator,
+    patch_file_name: []const u8,
+    channel: u4,
+) ![:0]u8 {
+    const dirname = std.fs.path.dirname(patch_file_name) orelse ".";
+    const basename = std.fs.path.stem(patch_file_name);
+    return std.fmt.allocPrintSentinel(
+        allocator,
+        "{s}/{s}-channel-{d}.ttl",
+        .{ dirname, basename, channel },
+        0,
+    );
+}
+
 // ============= Tests ===============
+
+test "get_plugin_patch_file_name" {
+    const allocator = std.testing.allocator;
+
+    const result = try get_plugin_patch_file_name(allocator, "folder/patchname.json", 1);
+    defer allocator.free(result);
+
+    try std.testing.expectEqualStrings("folder/patchname-channel-1.ttl", result);
+}
 
 test "load one-synth.json" {
     const allocator = std.testing.allocator;
