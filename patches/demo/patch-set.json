@@ -1,0 +1,16 @@
+{
+    "patches": [
+        {
+            "program": 1,
+            "file": "one-synth.json"
+        },
+        {
+            "program": 2,
+            "file": "one-synth-surge.json"
+        },
+        {
+            "program": 2,
+            "file": "two-synths.json"
+        }
+    ]
+}

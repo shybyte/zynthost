@@ -75,21 +75,24 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args); // free what argsAlloc allocated
 
-    const patch_file_name = if (args.len == 2) args[1] else return error.MissingFileName;
+    const patch_set_path = if (args.len == 2) args[1] else return error.MissingPatchSetFileName;
 
-    std.debug.print("Load patch {s} ...", .{patch_file_name});
-    const patch = try patch_mod.PatchConfig.load(allocator, patch_file_name);
-    defer patch.deinit();
+    std.debug.print("Load patch set {s} ...", .{patch_set_path});
+    const patch_set = try patch_mod.PatchSet.load(allocator, patch_set_path);
+    defer patch_set.deinit();
     std.debug.print(" successfully.", .{});
 
     const world = try synth_plugin_mod.create_world(allocator);
     defer synth_plugin_mod.free_world();
 
-    var plugins = try allocator.alloc(*SynthPlugin, patch.value.channels.len);
-    for (patch.value.channels, 0..) |channel, i| {
+    const patch = try patch_set.value.loadPatch(allocator, patch_set.value.patches[0].program);
+    defer patch.deinit();
+
+    var plugins = try allocator.alloc(*SynthPlugin, patch.channels().len);
+    for (patch.channels(), 0..) |channel, i| {
         const plugin = try SynthPlugin.init(allocator, world, channel.plugins[0].uri);
 
-        const plugin_patch_file_name = try patch_mod.get_plugin_patch_file_name(allocator, patch_file_name, @intCast(i));
+        const plugin_patch_file_name = try patch_mod.get_plugin_patch_file_name(allocator, patch.path, @intCast(i));
         defer allocator.free(plugin_patch_file_name);
         plugin.loadState(plugin_patch_file_name) catch |err| {
             std.debug.print("Failed to load plugin patch {}\n", .{err});
@@ -135,7 +138,7 @@ pub fn main() !void {
         if (std.mem.eql(u8, trimmed, "s")) {
             std.debug.print("Saving ... \n", .{});
             for (plugins, 0..) |plugin, channel| {
-                const plugin_patch_file_name = try patch_mod.get_plugin_patch_file_name(allocator, patch_file_name, @intCast(channel));
+                const plugin_patch_file_name = try patch_mod.get_plugin_patch_file_name(allocator, patch.path, @intCast(channel));
                 defer allocator.free(plugin_patch_file_name);
                 try plugin.saveState(plugin_patch_file_name);
             }

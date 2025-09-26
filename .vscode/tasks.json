@@ -9,7 +9,7 @@
                 "build",
                 "run",
                 "--",
-                "patches/demo/one-synth.json"
+                "patches/demo/patch-set.json"
             ],
             "group": {
                 "kind": "build",

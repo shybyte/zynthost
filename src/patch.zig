@@ -2,15 +2,52 @@ const std = @import("std");
 const utils = @import("./utils.zig");
 
 pub const PatchSet = struct {
-    entries: []PatchSetEntry,
+    patches: []PatchSetEntry,
+    dir: ?[]const u8 = null,
+
+    pub fn load(allocator: std.mem.Allocator, path: []const u8) !std.json.Parsed(@This()) {
+        var parsed_patch_set = try utils.loadJSON(@This(), allocator, path);
+        if (parsed_patch_set.value.dir == null) {
+            parsed_patch_set.value.dir = try parsed_patch_set.arena.allocator().dupe(u8, std.fs.path.dirname(path) orelse "");
+        }
+        return parsed_patch_set;
+    }
+
+    pub fn loadPatch(self: @This(), allocator: std.mem.Allocator, program: u7) !Patch {
+        for (self.patches) |patch| {
+            if (patch.program == program) {
+                const complete_patch_path = try std.fs.path.join(allocator, &.{ self.dir.?, patch.file });
+                defer allocator.free(complete_patch_path);
+                const parsed_patch_config = try PatchConfig.load(allocator, complete_patch_path);
+                return .{
+                    ._config = parsed_patch_config,
+                    .path = try parsed_patch_config.arena.allocator().dupe(u8, complete_patch_path),
+                };
+            }
+        }
+        return error.ProgramNotFound;
+    }
 };
 
-pub const PatchSetEntry = struct {
+const PatchSetEntry = struct {
     program: u7,
-    patch_config_file_name: [:0]u8,
+    file: [:0]u8,
 };
 
-pub const PatchConfig = struct {
+pub const Patch = struct {
+    _config: std.json.Parsed(PatchConfig),
+    path: []u8,
+
+    pub fn channels(self: @This()) []ChannelConfig {
+        return self._config.value.channels;
+    }
+
+    pub fn deinit(self: @This()) void {
+        self._config.deinit();
+    }
+};
+
+const PatchConfig = struct {
     channels: []ChannelConfig,
 
     pub fn load(allocator: std.mem.Allocator, path: []const u8) !std.json.Parsed(@This()) {
@@ -74,4 +111,23 @@ test "load two-synth.json" {
 
     try std.testing.expectEqualDeep("http://tytel.org/helm", patch_config.channels[0].plugins[0].uri);
     try std.testing.expectEqualDeep("https://surge-synthesizer.github.io/lv2/surge-xt", patch_config.channels[1].plugins[0].uri);
+}
+
+test "PatchSet.loadPatch" {
+    const allocator = std.testing.allocator;
+
+    // Load the PatchSet from the "patches/demo" directory
+    var parsed_patch_set = try PatchSet.load(allocator, "patches/demo/patch-set.json");
+    const patch_set = parsed_patch_set.value;
+    defer parsed_patch_set.deinit();
+
+    // Test loading a valid patch
+    const patch = try patch_set.loadPatch(allocator, 1);
+    defer patch.deinit();
+
+    try std.testing.expectEqualDeep("http://tytel.org/helm", patch.channels()[0].plugins[0].uri);
+
+    // Test loading a non-existent program
+    const result = patch_set.loadPatch(allocator, 3);
+    try std.testing.expect(result == error.ProgramNotFound);
 }

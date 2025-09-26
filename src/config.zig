@@ -1,7 +1,7 @@
 const std = @import("std");
 const utils = @import("./utils.zig");
 
-const AppConfig = struct {
+pub const AppConfig = struct {
     midi_name_filter: ?[]u8,
 
     pub fn loadWithFallback(allocator: std.mem.Allocator) !std.json.Parsed(AppConfig) {
