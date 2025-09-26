@@ -12,7 +12,11 @@ const freq = 440.0; // A4 note
 const sample_rate = 44100;
 const volume: f32 = 0.1; // Set desired output volume (0.0 to 1.0)
 
-const State = struct { phase: f64 = 0.0, synth_plugins: []*SynthPlugin, midi_input: *MidiInput };
+const State = struct {
+    patch_config: *const patch_mod.PatchConfig,
+    synth_plugins: []*SynthPlugin,
+    midi_input: *MidiInput,
+};
 
 // pseudo "message queue" to get program changes from audioCallback into main
 var new_midi_program: u7 = 0;
@@ -58,15 +62,15 @@ fn audioCallback(
     for (0..frameCount) |i| {
         var value_sum: f32 = 0.0;
 
-        for (data.synth_plugins) |synth_plugin| {
+        for (data.synth_plugins, data.patch_config.channels) |synth_plugin, channel| {
             var value_sum_synth: f32 = 0.0;
             for (synth_plugin.audio_ports.items) |audio_port_index| {
-                value_sum_synth += synth_plugin.audio_out_bufs[audio_port_index].?[i];
+                value_sum_synth += synth_plugin.audio_out_bufs[audio_port_index].?[i] * channel.volume;
             }
             value_sum += value_sum_synth / @as(f32, @floatFromInt(synth_plugin.audio_ports.items.len)) * 0.5;
         }
 
-        out[i] = value_sum / @as(f32, @floatFromInt(data.synth_plugins.len));
+        out[i] = value_sum * data.patch_config.volume / @as(f32, @floatFromInt(data.synth_plugins.len));
     }
 
     return audio_output.paContinue;
@@ -129,6 +133,7 @@ pub fn main() !void {
         defer midi_input.deinit();
 
         var state = State{
+            .patch_config = &patch.config.value,
             .synth_plugins = plugins,
             .midi_input = &midi_input,
         };

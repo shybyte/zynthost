@@ -29,7 +29,7 @@ pub const PatchSet = struct {
                 defer allocator.free(complete_patch_path);
                 const parsed_patch_config = try PatchConfig.load(allocator, complete_patch_path);
                 return .{
-                    ._config = parsed_patch_config,
+                    .config = parsed_patch_config,
                     .path = try parsed_patch_config.arena.allocator().dupe(u8, complete_patch_path),
                 };
             }
@@ -44,19 +44,20 @@ const PatchSetEntry = struct {
 };
 
 pub const Patch = struct {
-    _config: std.json.Parsed(PatchConfig),
+    config: std.json.Parsed(PatchConfig),
     path: []u8,
 
     pub fn channels(self: @This()) []ChannelConfig {
-        return self._config.value.channels;
+        return self.config.value.channels;
     }
 
     pub fn deinit(self: @This()) void {
-        self._config.deinit();
+        self.config.deinit();
     }
 };
 
-const PatchConfig = struct {
+pub const PatchConfig = struct {
+    volume: f32 = 1.0,
     channels: []ChannelConfig,
 
     pub fn load(allocator: std.mem.Allocator, path: []const u8) !std.json.Parsed(@This()) {
@@ -65,6 +66,7 @@ const PatchConfig = struct {
 };
 
 const ChannelConfig = struct {
+    volume: f32 = 1.0,
     plugins: []PluginConfig,
 };
 
@@ -107,6 +109,8 @@ test "load one-synth.json" {
 
     const patch_config = parsed_patch_config.value;
 
+    try std.testing.expectEqualDeep(0.98, patch_config.volume);
+    try std.testing.expectEqualDeep(0.99, patch_config.channels[0].volume);
     try std.testing.expectEqualDeep("http://tytel.org/helm", patch_config.channels[0].plugins[0].uri);
 }
 
@@ -117,6 +121,9 @@ test "load two-synth.json" {
     defer parsed_patch_config.deinit();
 
     const patch_config = parsed_patch_config.value;
+
+    try std.testing.expectEqualDeep(1.0, patch_config.volume);
+    try std.testing.expectEqualDeep(1.0, patch_config.channels[0].volume);
 
     try std.testing.expectEqualDeep("http://tytel.org/helm", patch_config.channels[0].plugins[0].uri);
     try std.testing.expectEqualDeep("https://surge-synthesizer.github.io/lv2/surge-xt", patch_config.channels[1].plugins[0].uri);
