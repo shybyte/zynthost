@@ -1,5 +1,15 @@
 const std = @import("std");
 
+pub fn loadJSON(
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+) !std.json.Parsed(T) {
+    const file_content = try std.fs.cwd().readFileAlloc(allocator, path, 1 << 20);
+    defer allocator.free(file_content);
+    return std.json.parseFromSlice(T, allocator, file_content, .{});
+}
+
 /// Decodes a percent-encoded URI component.
 /// e.g. "hello%20world" -> "hello world"
 pub fn decodeUriComponent(allocator: std.mem.Allocator, input: []const u8) ![:0]u8 {
@@ -24,6 +34,8 @@ pub fn decodeUriComponent(allocator: std.mem.Allocator, input: []const u8) ![:0]
 
     return out.toOwnedSliceSentinel(allocator, 0); // sized exactly; caller can allocator.free(result)
 }
+
+// ============== Tests =================
 
 test "decodeUriComponent" {
     const allocator = std.testing.allocator;

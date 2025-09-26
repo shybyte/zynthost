@@ -5,7 +5,7 @@ const SynthPlugin = synth_plugin_mod.SynthPlugin;
 const MidiInput = @import("./midi_input.zig").MidiInput;
 const audio_output = @import("./audio_output.zig");
 const patch_mod = @import("./patch.zig");
-const loadAppConfigWithFallback = @import("./config.zig").loadAppConfigWithFallback;
+const AppConfig = @import("./config.zig").AppConfig;
 
 const freq = 440.0; // A4 note
 const sample_rate = 44100;
@@ -78,7 +78,7 @@ pub fn main() !void {
     const patch_file_name = if (args.len == 2) args[1] else return error.MissingFileName;
 
     std.debug.print("Load patch {s} ...", .{patch_file_name});
-    const patch = try patch_mod.loadPatch(allocator, patch_file_name);
+    const patch = try patch_mod.PatchConfig.load(allocator, patch_file_name);
     defer patch.deinit();
     std.debug.print(" successfully.", .{});
 
@@ -104,7 +104,7 @@ pub fn main() !void {
         }
     }
 
-    const app_config = try loadAppConfigWithFallback(allocator);
+    const app_config = try AppConfig.loadWithFallback(allocator);
     defer app_config.deinit();
 
     var midi_input = try MidiInput.init(std.heap.page_allocator, app_config.value.midi_name_filter);
@@ -121,10 +121,6 @@ pub fn main() !void {
     for (plugins) |plugin| {
         _ = try plugin.showUI();
     }
-
-    // while (!plugins[0].session.isClosed()) {
-    //     std.Thread.sleep(100 * std.time.ns_per_ms);
-    // }
 
     var stdin_file = std.fs.File.stdin();
     var read_buffer: [1024]u8 = undefined;

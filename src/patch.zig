@@ -1,7 +1,21 @@
 const std = @import("std");
+const utils = @import("./utils.zig");
 
-const PatchConfig = struct {
+pub const PatchSet = struct {
+    entries: []PatchSetEntry,
+};
+
+pub const PatchSetEntry = struct {
+    program: u7,
+    patch_config_file_name: [:0]u8,
+};
+
+pub const PatchConfig = struct {
     channels: []ChannelConfig,
+
+    pub fn load(allocator: std.mem.Allocator, path: []const u8) !std.json.Parsed(@This()) {
+        return utils.loadJSON(@This(), allocator, path);
+    }
 };
 
 const ChannelConfig = struct {
@@ -11,15 +25,6 @@ const ChannelConfig = struct {
 const PluginConfig = struct {
     uri: [:0]u8,
 };
-
-pub fn loadPatch(
-    allocator: std.mem.Allocator,
-    path: []const u8,
-) !std.json.Parsed(PatchConfig) {
-    const file_content = try std.fs.cwd().readFileAlloc(allocator, path, 1 << 20);
-    defer allocator.free(file_content);
-    return std.json.parseFromSlice(PatchConfig, allocator, file_content, .{});
-}
 
 // Example: (patchname.json,1) => patchname-channel-1.ttl
 pub fn get_plugin_patch_file_name(
@@ -51,7 +56,7 @@ test "get_plugin_patch_file_name" {
 test "load one-synth.json" {
     const allocator = std.testing.allocator;
 
-    const parsed_patch_config = try loadPatch(allocator, "patches/demo/one-synth.json");
+    const parsed_patch_config = try PatchConfig.load(allocator, "patches/demo/one-synth.json");
     defer parsed_patch_config.deinit();
 
     const patch_config = parsed_patch_config.value;
@@ -62,7 +67,7 @@ test "load one-synth.json" {
 test "load two-synth.json" {
     const allocator = std.testing.allocator;
 
-    const parsed_patch_config = try loadPatch(allocator, "patches/demo/two-synths.json");
+    const parsed_patch_config = try PatchConfig.load(allocator, "patches/demo/two-synths.json");
     defer parsed_patch_config.deinit();
 
     const patch_config = parsed_patch_config.value;
