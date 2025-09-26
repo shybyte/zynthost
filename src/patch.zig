@@ -13,6 +13,15 @@ pub const PatchSet = struct {
         return parsed_patch_set;
     }
 
+    pub fn has_midi_program(self: @This(), program: u7) bool {
+        for (self.patches) |patch| {
+            if (patch.program == program) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     pub fn loadPatch(self: @This(), allocator: std.mem.Allocator, program: u7) !Patch {
         for (self.patches) |patch| {
             if (patch.program == program) {
@@ -122,7 +131,7 @@ test "PatchSet.loadPatch" {
     defer parsed_patch_set.deinit();
 
     // Test loading a valid patch
-    const patch = try patch_set.loadPatch(allocator, 1);
+    const patch = try patch_set.loadPatch(allocator, 0);
     defer patch.deinit();
 
     try std.testing.expectEqualDeep("http://tytel.org/helm", patch.channels()[0].plugins[0].uri);

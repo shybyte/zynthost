@@ -10,6 +10,17 @@ pub fn loadJSON(
     return std.json.parseFromSlice(T, allocator, file_content, .{});
 }
 
+pub fn fileHasInput(file: std.fs.File) !bool {
+    var fds = [_]std.posix.pollfd{
+        .{ .fd = file.handle, .events = std.posix.POLL.IN, .revents = 0 },
+    };
+
+    const nready = try std.posix.poll(&fds, 0); // non-blocking check
+    if (nready == 0) return false;
+
+    return (fds[0].revents & std.posix.POLL.IN) != 0;
+}
+
 /// Decodes a percent-encoded URI component.
 /// e.g. "hello%20world" -> "hello world"
 pub fn decodeUriComponent(allocator: std.mem.Allocator, input: []const u8) ![:0]u8 {

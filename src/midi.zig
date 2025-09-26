@@ -13,6 +13,16 @@ pub const MidiMessage = struct {
         return @truncate(self.data[0] & 0x0F);
     }
 
+    /// If this is a Program Change message (0xC0–0xCF), return the program number.
+    pub fn program(self: MidiMessage) ?u7 {
+        const status_nibble: u8 = self.data[0] >> 4;
+        if (status_nibble == 0xC) {
+            // Program number is in data1 (7 bits).
+            return @truncate(self.data[1]);
+        }
+        return null;
+    }
+
     /// Custom formatter used by `{f}` if this signature matches exactly.
     pub fn format(
         self: MidiMessage,
@@ -45,4 +55,14 @@ test "midi message format" {
         "MidiMessage(status=0x91, data1=60, data2=100, channel=1)",
         s,
     );
+}
+
+test "midi message program change" {
+    var msg = MidiMessage.init(0xC2, 42, 0); // Program Change, channel 2, program 42
+
+    try std.testing.expect(msg.channel() == 2);
+    try std.testing.expectEqual(42, msg.program());
+
+    var note_msg = MidiMessage.init(0x91, 60, 100); // Not a Program Change
+    try std.testing.expectEqual(null, note_msg.program());
 }

@@ -1,11 +1,11 @@
 {
     "patches": [
         {
-            "program": 1,
+            "program": 0,
             "file": "one-synth.json"
         },
         {
-            "program": 2,
+            "program": 1,
             "file": "one-synth-surge.json"
         },
         {

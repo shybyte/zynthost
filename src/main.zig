@@ -6,12 +6,16 @@ const MidiInput = @import("./midi_input.zig").MidiInput;
 const audio_output = @import("./audio_output.zig");
 const patch_mod = @import("./patch.zig");
 const AppConfig = @import("./config.zig").AppConfig;
+const utils = @import("./utils.zig");
 
 const freq = 440.0; // A4 note
 const sample_rate = 44100;
 const volume: f32 = 0.1; // Set desired output volume (0.0 to 1.0)
 
 const State = struct { phase: f64 = 0.0, synth_plugins: []*SynthPlugin, midi_input: *MidiInput };
+
+// pseudo "message queue" to get program changes from audioCallback into main
+var new_midi_program: u7 = 0;
 
 fn audioCallback(
     input: ?*const anyopaque,
@@ -34,9 +38,15 @@ fn audioCallback(
 
     const midi_events = data.midi_input.poll();
 
+    for (midi_events) |midi_event| {
+        if (midi_event.program()) |program| {
+            new_midi_program = program;
+        }
+    }
+
     for (data.synth_plugins, 0..) |synth_plugin, channel| {
         for (midi_events) |midi_event| {
-            if (midi_event.channel() == channel) {
+            if (midi_event.program() == null and midi_event.channel() == channel) {
                 std.debug.print("MidiMessage: {f}\n", .{midi_event});
                 synth_plugin.midi_sequence.addEvent(0, &midi_event.data);
             }
@@ -85,72 +95,92 @@ pub fn main() !void {
     const world = try synth_plugin_mod.create_world(allocator);
     defer synth_plugin_mod.free_world();
 
-    const patch = try patch_set.value.loadPatch(allocator, patch_set.value.patches[0].program);
-    defer patch.deinit();
+    var midi_program = patch_set.value.patches[0].program;
 
-    var plugins = try allocator.alloc(*SynthPlugin, patch.channels().len);
-    for (patch.channels(), 0..) |channel, i| {
-        const plugin = try SynthPlugin.init(allocator, world, channel.plugins[0].uri);
+    var quit = false;
+    while (!quit) {
+        new_midi_program = midi_program;
+        const patch = try patch_set.value.loadPatch(allocator, midi_program);
+        defer patch.deinit();
 
-        const plugin_patch_file_name = try patch_mod.get_plugin_patch_file_name(allocator, patch.path, @intCast(i));
-        defer allocator.free(plugin_patch_file_name);
-        plugin.loadState(plugin_patch_file_name) catch |err| {
-            std.debug.print("Failed to load plugin patch {}\n", .{err});
-        };
+        var plugins = try allocator.alloc(*SynthPlugin, patch.channels().len);
+        for (patch.channels(), 0..) |channel, i| {
+            const plugin = try SynthPlugin.init(allocator, world, channel.plugins[0].uri);
 
-        plugins[i] = plugin;
-    }
-    defer allocator.free(plugins);
-    defer {
-        for (plugins) |plugin| {
-            plugin.deinit();
+            const plugin_patch_file_name = try patch_mod.get_plugin_patch_file_name(allocator, patch.path, @intCast(i));
+            defer allocator.free(plugin_patch_file_name);
+            plugin.loadState(plugin_patch_file_name) catch |err| {
+                std.debug.print("Failed to load plugin patch {}\n", .{err});
+            };
+
+            plugins[i] = plugin;
         }
-    }
-
-    const app_config = try AppConfig.loadWithFallback(allocator);
-    defer app_config.deinit();
-
-    var midi_input = try MidiInput.init(std.heap.page_allocator, app_config.value.midi_name_filter);
-    defer midi_input.deinit();
-
-    var state = State{
-        .synth_plugins = plugins,
-        .midi_input = &midi_input,
-    };
-
-    try audio_output.startAudio(&state, audioCallback);
-    defer audio_output.stopAudio();
-
-    for (plugins) |plugin| {
-        _ = try plugin.showUI();
-    }
-
-    var stdin_file = std.fs.File.stdin();
-    var read_buffer: [1024]u8 = undefined;
-    var reader = stdin_file.reader(&read_buffer);
-
-    while (true) {
-        const line = try reader.interface.takeDelimiterExclusive('\n');
-        if (line.len == 0) break; // EOF
-
-        const trimmed = std.mem.trimRight(u8, line, "\r\n");
-
-        if (std.mem.eql(u8, trimmed, "s")) {
-            std.debug.print("Saving ... \n", .{});
-            for (plugins, 0..) |plugin, channel| {
-                const plugin_patch_file_name = try patch_mod.get_plugin_patch_file_name(allocator, patch.path, @intCast(channel));
-                defer allocator.free(plugin_patch_file_name);
-                try plugin.saveState(plugin_patch_file_name);
+        defer allocator.free(plugins);
+        defer {
+            for (plugins) |plugin| {
+                plugin.deinit();
             }
         }
 
-        if (std.mem.eql(u8, trimmed, "q")) break;
+        const app_config = try AppConfig.loadWithFallback(allocator);
+        defer app_config.deinit();
 
-        std.debug.print("You entered: \"{s}\"\n", .{trimmed});
-    }
+        var midi_input = try MidiInput.init(std.heap.page_allocator, app_config.value.midi_name_filter);
+        defer midi_input.deinit();
 
-    for (plugins) |plugin| {
-        plugin.session.deinit();
+        var state = State{
+            .synth_plugins = plugins,
+            .midi_input = &midi_input,
+        };
+
+        try audio_output.startAudio(&state, audioCallback);
+        defer audio_output.stopAudio();
+
+        for (plugins) |plugin| {
+            _ = try plugin.showUI();
+        }
+
+        var stdin_file = std.fs.File.stdin();
+        var read_buffer: [1024]u8 = undefined;
+        var reader = stdin_file.reader(&read_buffer);
+
+        while (true) {
+            if (new_midi_program != midi_program) {
+                std.debug.print("Program change {}\n", .{new_midi_program});
+                if (patch_set.value.has_midi_program(new_midi_program)) {
+                    midi_program = new_midi_program;
+                    break;
+                } else {
+                    std.debug.print("Program ignored because not available in patch set {any}\n", .{patch_set.value.patches});
+                    new_midi_program = midi_program;
+                }
+            }
+
+            if (!try utils.fileHasInput(stdin_file)) {
+                std.Thread.sleep(100 * std.time.ns_per_ms);
+                continue;
+            }
+
+            const line = try reader.interface.takeDelimiterExclusive('\n');
+            const trimmed = std.mem.trimRight(u8, line, "\r\n");
+            std.debug.print("You entered: \"{s}\"\n", .{trimmed});
+
+            if (std.mem.eql(u8, trimmed, "s")) {
+                std.debug.print("Saving ... \n", .{});
+                for (plugins, 0..) |plugin, channel| {
+                    const plugin_patch_file_name = try patch_mod.get_plugin_patch_file_name(allocator, patch.path, @intCast(channel));
+                    defer allocator.free(plugin_patch_file_name);
+                    try plugin.saveState(plugin_patch_file_name);
+                }
+            } else if (std.mem.eql(u8, trimmed, "q")) {
+                quit = true;
+                break;
+            }
+        }
+
+        for (plugins) |plugin| {
+            plugin.session.deinit();
+        }
     }
 
     std.debug.print("Finished.\n", .{});
