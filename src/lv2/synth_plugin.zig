@@ -328,6 +328,7 @@ pub const SynthPlugin = struct {
         c.lilv_instance_deactivate(self.instance);
         c.lilv_instance_free(self.instance);
         c.lilv_node_free(self.plugin_uri);
+        std.debug.print("lilv denit is done for {s} ... \n", .{self.plugin_uri_string});
 
         for (self.audio_in_bufs) |audio_buf_opt| {
             if (audio_buf_opt) |audio_buf| {

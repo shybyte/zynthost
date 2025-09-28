@@ -9,12 +9,6 @@ const patch_mod = @import("./patch.zig");
 const AppConfig = @import("./config.zig").AppConfig;
 const utils = @import("./utils.zig");
 
-const State = struct {
-    patch_config: *const patch_mod.PatchConfig,
-    channels: []Channel,
-    midi_input: *MidiInput,
-};
-
 const Channel = struct {
     midi_channel: u7,
     config: *const patch_mod.ChannelConfig,
@@ -85,13 +79,12 @@ pub fn main() !void {
         var midi_input = try MidiInput.init(std.heap.page_allocator, app_config.value.midi_name_filter);
         defer midi_input.deinit();
 
-        var state = State{
+        var audio_callback_user_data = AudioCallbackUserData{
             .patch_config = &patch.config.value,
             .channels = channels.items,
             .midi_input = &midi_input,
         };
-
-        try audio_output.startAudio(&state, audioCallback);
+        try audio_output.startAudio(&audio_callback_user_data, audioCallback);
         defer audio_output.stopAudio();
 
         for (channels.items) |channel| {
@@ -131,6 +124,12 @@ pub fn main() !void {
     std.debug.print("Finished.\n", .{});
 }
 
+const AudioCallbackUserData = struct {
+    patch_config: *const patch_mod.PatchConfig,
+    channels: []Channel,
+    midi_input: *MidiInput,
+};
+
 fn audioCallback(
     input: ?*const anyopaque,
     output: ?*anyopaque,
@@ -143,7 +142,7 @@ fn audioCallback(
     _ = time_info;
     _ = status_flags;
 
-    const data: *State = @ptrCast(@alignCast(user_data.?));
+    const data: *AudioCallbackUserData = @ptrCast(@alignCast(user_data.?));
     const out: [*]f32 = @ptrCast(@alignCast(output));
 
     if (frame_count > synth_plugin_mod.max_frames) {
