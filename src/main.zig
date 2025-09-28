@@ -134,20 +134,20 @@ pub fn main() !void {
 fn audioCallback(
     input: ?*const anyopaque,
     output: ?*anyopaque,
-    frameCount: c_ulong,
-    timeInfo: [*c]const audio_output.PaStreamCallbackTimeInfo,
-    statusFlags: audio_output.PaStreamCallbackFlags,
-    userData: ?*anyopaque,
+    frame_count: c_ulong,
+    time_info: [*c]const audio_output.PaStreamCallbackTimeInfo,
+    status_flags: audio_output.PaStreamCallbackFlags,
+    user_data: ?*anyopaque,
 ) callconv(.c) c_int {
     _ = input;
-    _ = timeInfo;
-    _ = statusFlags;
+    _ = time_info;
+    _ = status_flags;
 
-    const data: *State = @ptrCast(@alignCast(userData.?));
+    const data: *State = @ptrCast(@alignCast(user_data.?));
     const out: [*]f32 = @ptrCast(@alignCast(output));
 
-    if (frameCount > synth_plugin_mod.max_frames) {
-        std.debug.print("audioCallback got framecount {}\n", .{frameCount});
+    if (frame_count > synth_plugin_mod.max_frames) {
+        std.debug.print("audioCallback got framecount {}\n", .{frame_count});
     }
 
     const midi_events = data.midi_input.poll();
@@ -160,10 +160,10 @@ fn audioCallback(
 
     for (data.channels) |*channel| {
         routeMidiEvents(channel, midi_events);
-        channel.plugin.run(@intCast(frameCount));
+        channel.plugin.run(@intCast(frame_count));
     }
 
-    const frame_count: usize = @intCast(frameCount);
+    const frame_count: usize = @intCast(frame_count);
     mixFrames(out[0..frame_count], data.channels, data.patch_config.volume);
 
     return audio_output.paContinue;
