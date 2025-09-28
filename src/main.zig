@@ -56,6 +56,7 @@ pub fn main() !void {
         defer patch.deinit();
 
         var channels = try std.ArrayList(Channel).initCapacity(allocator, patch.channels().len);
+        defer channels.deinit(allocator);
         for (patch.channels(), 0..) |*channel, i| {
             if (channel.plugins.len == 0) continue;
             const plugin = try SynthPlugin.init(allocator, world, channel.plugins[0].uri);
@@ -72,7 +73,6 @@ pub fn main() !void {
                 .plugin = plugin,
             });
         }
-        defer channels.deinit(allocator);
         defer {
             for (channels.items) |channel| {
                 channel.plugin.deinit();
@@ -116,9 +116,10 @@ pub fn main() !void {
 
             if (std.mem.eql(u8, command, "s")) {
                 std.debug.print("Saving ... \n", .{});
-                try saveChannelStates(allocator, channels, patch.path);
+                try saveChannelStates(allocator, channels.items, patch.path);
             } else if (std.mem.eql(u8, command, "q")) {
                 quit = true;
+                break;
             }
         }
 
