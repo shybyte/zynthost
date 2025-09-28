@@ -545,12 +545,12 @@ pub const UiSession = struct {
 
         // Convert bundle/bin URIs → filesystem paths
         const binary_uri_c = c.lilv_node_as_uri(c.lilv_ui_get_binary_uri(ui.?)) orelse return error.SomeError;
-        const binary_path_c = try utils.convertUritoPath(synth_plugin.allocator, binary_uri_c);
+        const binary_path_c = try utils.convertUriToPath(synth_plugin.allocator, binary_uri_c);
         defer synth_plugin.allocator.free(binary_path_c);
         std.debug.print("binary_path_c {s}\n", .{binary_path_c});
 
         const bundle_uri_c = c.lilv_node_as_uri(c.lilv_ui_get_bundle_uri(ui.?)) orelse return error.SomeError;
-        const bundle_path_c = try utils.convertUritoPath(synth_plugin.allocator, bundle_uri_c);
+        const bundle_path_c = try utils.convertUriToPath(synth_plugin.allocator, bundle_uri_c);
         defer synth_plugin.allocator.free(bundle_path_c);
         std.debug.print("bundle_path_c {s}\n", .{bundle_path_c});
 
