@@ -23,6 +23,7 @@ pub const SynthPlugin = struct {
     allocator: std.mem.Allocator,
     world: *c.LilvWorld,
 
+    plugin_uri_string: []const u8,
     plugin_uri: *c.LilvNode,
     plugin: *const c.LilvPlugin,
     instance: [*c]c.LilvInstance,
@@ -40,7 +41,7 @@ pub const SynthPlugin = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         world: *c.LilvWorld,
-        plugin_uri_string: [*:0]const u8, // already a valid C string
+        plugin_uri_string: [:0]const u8, // already a valid C string
     ) !*Self {
         const self = try allocator.create(SynthPlugin);
         errdefer allocator.destroy(self);
@@ -52,6 +53,7 @@ pub const SynthPlugin = struct {
         const plugins = c.lilv_world_get_all_plugins(world);
         if (plugins == null) return error.NoPlugins;
 
+        self.plugin_uri_string = try allocator.dupe(u8, plugin_uri_string);
         self.plugin_uri = c.lilv_new_uri(world, plugin_uri_string) orelse return error.BadPluginUri;
         self.plugin = c.lilv_plugins_get_by_uri(plugins, self.plugin_uri) orelse return error.PluginNotFound;
 
@@ -322,6 +324,11 @@ pub const SynthPlugin = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        std.debug.print("deinit {s} ... \n", .{self.plugin_uri_string});
+        c.lilv_instance_deactivate(self.instance);
+        c.lilv_instance_free(self.instance);
+        c.lilv_node_free(self.plugin_uri);
+
         for (self.audio_in_bufs) |audio_buf_opt| {
             if (audio_buf_opt) |audio_buf| {
                 self.allocator.free(audio_buf);
@@ -339,10 +346,10 @@ pub const SynthPlugin = struct {
 
         self.allocator.free(self.control_in_vals);
 
-        c.lilv_node_free(self.plugin_uri);
-        c.lilv_instance_deactivate(self.instance);
-        c.lilv_instance_free(self.instance);
+        std.debug.print("deinit {s} done \n", .{self.plugin_uri_string});
+        self.allocator.free(self.plugin_uri_string);
         self.allocator.destroy(self);
+        std.debug.print("really done \n", .{});
     }
 };
 
@@ -603,13 +610,11 @@ pub const UiSession = struct {
     }
 
     pub fn deinit(self: *UiSession) void {
+        std.debug.print("Closing UI {s} ... \n", .{self.plugin.plugin_uri_string});
+        self.ext.hide.?(self.ext);
         c.suil_host_free(self.host);
         c.suil_instance_free(self.suil_instance);
-
-        const ext = self.ext;
-        ext.hide.?(ext);
-
-        std.debug.print("UI Closed\n", .{});
+        std.debug.print("UI {s}] Closed\n", .{self.plugin.plugin_uri_string});
     }
 };
 
