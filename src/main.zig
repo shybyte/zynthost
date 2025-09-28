@@ -111,12 +111,14 @@ pub fn main() !void {
             }
 
             const line = try reader.interface.takeDelimiterExclusive('\n');
-            const trimmed = std.mem.trimRight(u8, line, "\r\n");
-            std.debug.print("You entered: \"{s}\"\n", .{trimmed});
+            const command = std.mem.trimRight(u8, line, "\r\n");
+            std.debug.print("You entered: \"{s}\"\n", .{command});
 
-            if (try handleCommand(trimmed, allocator, channels.items, patch.path)) {
+            if (std.mem.eql(u8, command, "s")) {
+                std.debug.print("Saving ... \n", .{});
+                try saveChannelStates(allocator, channels, patch.path);
+            } else if (std.mem.eql(u8, command, "q")) {
                 quit = true;
-                break;
             }
         }
 
@@ -215,42 +217,22 @@ fn pollProgramChange(
 
     std.debug.print("Program change {}\n", .{new_midi_program_local});
 
-    const patch_value = patch_set.*;
-    if (patch_value.has_midi_program(new_midi_program_local)) {
+    if (patch_set.has_midi_program(new_midi_program_local)) {
         current_program.* = new_midi_program_local;
         return true;
     }
 
     std.debug.print(
         "Program ignored because not available in patch set {any}\n",
-        .{patch_value.patches},
+        .{patch_set.patches},
     );
     new_midi_program.store(current_program.*, .seq_cst);
     return false;
 }
 
-fn handleCommand(
-    command: []const u8,
-    allocator: std.mem.Allocator,
-    channels: []Channel,
-    patch_path: []const u8,
-) !bool {
-    if (std.mem.eql(u8, command, "s")) {
-        std.debug.print("Saving ... \n", .{});
-        try saveChannelStates(allocator, channels, patch_path);
-        return false;
-    }
-
-    if (std.mem.eql(u8, command, "q")) {
-        return true;
-    }
-
-    return false;
-}
-
 fn saveChannelStates(
     allocator: std.mem.Allocator,
-    channels: []Channel,
+    channels: []const Channel,
     patch_path: []const u8,
 ) !void {
     for (channels) |channel| {
