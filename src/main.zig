@@ -14,12 +14,12 @@ const volume: f32 = 0.1; // Set desired output volume (0.0 to 1.0)
 
 const State = struct {
     patch_config: *const patch_mod.PatchConfig,
-    synth_plugins: []*SynthPlugin,
+    channels: []Channel,
     midi_input: *MidiInput,
 };
 
 // pseudo "message queue" to get program changes from audioCallback into main
-var new_midi_program: u7 = 0;
+var new_midi_program = std.atomic.Value(u8).init(0);
 
 fn audioCallback(
     input: ?*const anyopaque,
@@ -44,37 +44,50 @@ fn audioCallback(
 
     for (midi_events) |midi_event| {
         if (midi_event.program()) |program| {
-            new_midi_program = program;
+            new_midi_program.store(program, .seq_cst);
         }
     }
 
-    for (data.synth_plugins, 0..) |synth_plugin, channel| {
+    for (
+        data.channels,
+    ) |channel| {
         for (midi_events) |midi_event| {
-            if (midi_event.program() == null and midi_event.channel() == channel) {
+            if (midi_event.program() == null and midi_event.channel() == channel.midi_channel) {
                 std.debug.print("MidiMessage: {f}\n", .{midi_event});
-                synth_plugin.midi_sequence.addEvent(0, &midi_event.data);
+                channel.plugin.midi_sequence.addEvent(0, &midi_event.data);
             }
         }
 
-        synth_plugin.run(@intCast(frameCount));
+        channel.plugin.run(@intCast(frameCount));
     }
 
-    for (0..frameCount) |i| {
-        var value_sum: f32 = 0.0;
+    if (data.channels.len > 0) {
+        for (0..frameCount) |i| {
+            var value_sum: f32 = 0.0;
 
-        for (data.synth_plugins, data.patch_config.channels) |synth_plugin, channel| {
-            var value_sum_synth: f32 = 0.0;
-            for (synth_plugin.audio_ports.items) |audio_port_index| {
-                value_sum_synth += synth_plugin.audio_out_bufs[audio_port_index].?[i] * channel.volume;
+            for (data.channels) |channel| {
+                const synth_plugin = channel.plugin;
+                var value_sum_synth: f32 = 0.0;
+                for (synth_plugin.audio_ports.items) |audio_port_index| {
+                    value_sum_synth += synth_plugin.audio_out_bufs[audio_port_index].?[i] * channel.config.volume;
+                }
+                value_sum += value_sum_synth / @as(f32, @floatFromInt(synth_plugin.audio_ports.items.len)) * 0.5;
             }
-            value_sum += value_sum_synth / @as(f32, @floatFromInt(synth_plugin.audio_ports.items.len)) * 0.5;
-        }
 
-        out[i] = value_sum * data.patch_config.volume / @as(f32, @floatFromInt(data.synth_plugins.len));
+            out[i] = value_sum * data.patch_config.volume / @as(f32, @floatFromInt(data.channels.len));
+        }
+    } else {
+        @memset(out[0..frameCount], 0);
     }
 
     return audio_output.paContinue;
 }
+
+const Channel = struct {
+    midi_channel: u7,
+    config: *const patch_mod.ChannelConfig,
+    plugin: *SynthPlugin,
+};
 
 pub fn main() !void {
     std.debug.print("Starting Zynthost...\n", .{});
@@ -100,15 +113,16 @@ pub fn main() !void {
     defer synth_plugin_mod.free_world();
 
     var midi_program = patch_set.value.patches[0].program;
+    new_midi_program.store(midi_program, .seq_cst);
 
     var quit = false;
     while (!quit) {
-        new_midi_program = midi_program;
         const patch = try patch_set.value.loadPatch(allocator, midi_program);
         defer patch.deinit();
 
-        var plugins = try allocator.alloc(*SynthPlugin, patch.channels().len);
-        for (patch.channels(), 0..) |channel, i| {
+        var channels = try std.ArrayList(Channel).initCapacity(allocator, patch.channels().len);
+        for (patch.channels(), 0..) |*channel, i| {
+            if (channel.plugins.len == 0) continue;
             const plugin = try SynthPlugin.init(allocator, world, channel.plugins[0].uri);
 
             const plugin_patch_file_name = try patch_mod.get_plugin_patch_file_name(allocator, patch.path, @intCast(i));
@@ -117,12 +131,16 @@ pub fn main() !void {
                 std.debug.print("Failed to load plugin patch {}\n", .{err});
             };
 
-            plugins[i] = plugin;
+            channels.appendAssumeCapacity(.{
+                .config = channel,
+                .midi_channel = @intCast(i),
+                .plugin = plugin,
+            });
         }
-        defer allocator.free(plugins);
+        defer channels.deinit(allocator);
         defer {
-            for (plugins) |plugin| {
-                plugin.deinit();
+            for (channels.items) |channel| {
+                channel.plugin.deinit();
             }
         }
 
@@ -134,15 +152,15 @@ pub fn main() !void {
 
         var state = State{
             .patch_config = &patch.config.value,
-            .synth_plugins = plugins,
+            .channels = channels.items,
             .midi_input = &midi_input,
         };
 
         try audio_output.startAudio(&state, audioCallback);
         defer audio_output.stopAudio();
 
-        for (plugins) |plugin| {
-            _ = try plugin.showUI();
+        for (channels.items) |channel| {
+            _ = try channel.plugin.showUI();
         }
 
         var stdin_file = std.fs.File.stdin();
@@ -150,14 +168,15 @@ pub fn main() !void {
         var reader = stdin_file.reader(&read_buffer);
 
         while (true) {
-            if (new_midi_program != midi_program) {
-                std.debug.print("Program change {}\n", .{new_midi_program});
-                if (patch_set.value.has_midi_program(new_midi_program)) {
-                    midi_program = new_midi_program;
+            const new_midi_program_local: u7 = @intCast(new_midi_program.load(.seq_cst));
+            if (new_midi_program_local != midi_program) {
+                std.debug.print("Program change {}\n", .{new_midi_program_local});
+                if (patch_set.value.has_midi_program(new_midi_program_local)) {
+                    midi_program = new_midi_program_local;
                     break;
                 } else {
                     std.debug.print("Program ignored because not available in patch set {any}\n", .{patch_set.value.patches});
-                    new_midi_program = midi_program;
+                    new_midi_program.store(midi_program, .seq_cst);
                 }
             }
 
@@ -172,10 +191,10 @@ pub fn main() !void {
 
             if (std.mem.eql(u8, trimmed, "s")) {
                 std.debug.print("Saving ... \n", .{});
-                for (plugins, 0..) |plugin, channel| {
-                    const plugin_patch_file_name = try patch_mod.get_plugin_patch_file_name(allocator, patch.path, @intCast(channel));
+                for (channels.items) |channel| {
+                    const plugin_patch_file_name = try patch_mod.get_plugin_patch_file_name(allocator, patch.path, @intCast(channel.midi_channel));
                     defer allocator.free(plugin_patch_file_name);
-                    try plugin.saveState(plugin_patch_file_name);
+                    try channel.plugin.saveState(plugin_patch_file_name);
                 }
             } else if (std.mem.eql(u8, trimmed, "q")) {
                 quit = true;
@@ -183,8 +202,8 @@ pub fn main() !void {
             }
         }
 
-        for (plugins) |plugin| {
-            plugin.session.deinit();
+        for (channels.items) |channel| {
+            channel.plugin.session.deinit();
         }
     }
 

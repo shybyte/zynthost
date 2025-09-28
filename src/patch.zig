@@ -65,7 +65,7 @@ pub const PatchConfig = struct {
     }
 };
 
-const ChannelConfig = struct {
+pub const ChannelConfig = struct {
     volume: f32 = 1.0,
     plugins: []PluginConfig,
 };
