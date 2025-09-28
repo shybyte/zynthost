@@ -163,8 +163,7 @@ fn audioCallback(
         channel.plugin.run(@intCast(frame_count));
     }
 
-    const frame_count: usize = @intCast(frame_count);
-    mixFrames(out[0..frame_count], data.channels, data.patch_config.volume);
+    mixFrames(out[0..@intCast(frame_count)], data.channels, data.patch_config.volume);
 
     return audio_output.paContinue;
 }
