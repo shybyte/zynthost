@@ -5,11 +5,13 @@ pub fn loadJSON(
     allocator: std.mem.Allocator,
     path: []const u8,
 ) !std.json.Parsed(T) {
-    const file_content = try std.fs.cwd().readFileAlloc(allocator, path, 1 << 20);
+    const MAX_JSON_SIZE = 100 * 1024 * 1024; // 100 MB
+    const file_content = try std.fs.cwd().readFileAlloc(allocator, path, MAX_JSON_SIZE);
     defer allocator.free(file_content);
     return std.json.parseFromSlice(T, allocator, file_content, .{});
 }
 
+/// NOTE: This POSIX-only implementation does not work on Windows handles.
 pub fn fileHasInput(file: std.fs.File) !bool {
     var fds = [_]std.posix.pollfd{
         .{ .fd = file.handle, .events = std.posix.POLL.IN, .revents = 0 },
