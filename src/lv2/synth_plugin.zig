@@ -251,7 +251,8 @@ pub const SynthPlugin = struct {
     }
 
     pub fn saveState(self: *Self, file_path: [:0]const u8) !void {
-        const dir = try std.heap.page_allocator.dupeZ(u8, std.fs.path.dirname(file_path) orelse "");
+        const dir = try self.allocator.dupeZ(u8, std.fs.path.dirname(file_path) orelse "");
+        defer self.allocator.free(dir);
 
         std.debug.print("saveState {s} {s}\n", .{ dir, file_path });
 
@@ -295,12 +296,9 @@ pub const SynthPlugin = struct {
     }
 
     pub fn loadState(self: *Self, file_path: [:0]const u8) !void {
-        const file = std.fs.cwd().openFile(file_path, .{}) catch |err| switch (err) {
-            error.FileNotFound => {
-                std.debug.print("File '{s}' does not exist.\n", .{file_path});
-                return;
-            },
-            else => return err, // propagate other errors
+        const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
+            std.debug.print("Can't open file '{s}'.\n", .{file_path});
+            return err;
         };
         defer file.close();
 
@@ -540,7 +538,7 @@ pub const UiSession = struct {
         const plugin = synth_plugin.plugin;
 
         const ext_ui_class = c.lilv_new_uri(world, "http://kxstudio.sf.net/ns/lv2ext/external-ui#Widget");
-        // defer c.lilv_node_free(ext_ui_class);
+        defer c.lilv_node_free(ext_ui_class);
 
         try synth_plugin.listUIs();
 
@@ -648,49 +646,47 @@ fn on_ui_closed(controller: ?*anyopaque) callconv(.c) void {
 // ===========================================================
 // Simple global URI→URID map for LV2_URID_Map (host feature)
 // ===========================================================
-var next_urid: c_uint = 1;
-var uri_table: std.StringHashMap(c_uint) = undefined;
-var table_inited = false;
+var uri_table: ?std.StringHashMap(c_uint) = null;
 
 fn initUridTable(allocator: std.mem.Allocator) !void {
-    if (!table_inited) {
-        uri_table = std.StringHashMap(c_uint).init(allocator);
-        table_inited = true;
-    }
+    if (uri_table != null) return;
+    uri_table = std.StringHashMap(c_uint).init(allocator);
 }
 
 fn deinitUridTable() void {
-    uri_table.deinit();
+    if (uri_table) |*table| {
+        var it = table.iterator();
+        while (it.next()) |entry| {
+            const key_slice = entry.key_ptr.*;
+            const free_len = key_slice.len + 1; // includes NUL terminator from dupeZ
+            const key_ptr_mut: [*]u8 = @constCast(key_slice.ptr);
+            std.heap.page_allocator.free(key_ptr_mut[0..free_len]);
+        }
+        table.deinit();
+        uri_table = null;
+    }
 }
 
 export fn urid_map_func(handle: ?*anyopaque, uri: ?[*:0]const u8) callconv(.c) c.LV2_URID {
     _ = handle;
     const s = std.mem.span(uri.?);
 
-    // std.debug.print("urid_map_func {s}\n", .{uri.?});
-
-    if (table_inited) {
-        if (uri_table.get(s)) |found| return found;
+    if (uri_table) |*table| {
+        if (table.get(s)) |found| return found;
         // Copy the key because s points to plugin/lilv-owned memory
         const dup = std.heap.page_allocator.dupeZ(u8, s) catch return 0;
-        const id: c_uint = next_urid;
-        next_urid += 1;
-        _ = uri_table.put(dup, id) catch return 0;
-        // std.debug.print("urid_map_func return  {s} {}\n", .{ uri.?, id });
-        return id;
+        const new_id: c.LV2_URID = @intCast(table.count() + 1);
+        _ = table.put(dup, new_id) catch return 0;
+        return new_id;
     } else {
-        // Fallback linear counter if somehow called before init
-        const id2: c_uint = next_urid;
-        next_urid += 1;
-        return id2;
+        unreachable;
     }
 }
 
 export fn urid_unmap_func(handle: ?*anyopaque, urid: c.LV2_URID) callconv(.c) ?[*:0]const u8 {
     _ = handle;
-    if (!table_inited) return null;
 
-    var it = uri_table.iterator();
+    var it = (uri_table orelse return null).iterator();
     while (it.next()) |entry| {
         if (entry.value_ptr.* == urid) {
             // The key we stored is a dup’d string; ensure it is NUL-terminated
@@ -807,7 +803,7 @@ fn listPlugins(world: *c.LilvWorld) void {
 }
 // ---- Tests ----
 
-test "SynthPlugin initialization and deinitialization" {
+test "SynthPlugin" {
     const allocator = std.testing.allocator;
 
     const world = try create_world(allocator);
@@ -831,7 +827,7 @@ test "SynthPlugin initialization and deinitialization" {
 
     std.debug.print(" {any}\n", .{synth_plugin.audio_out_bufs[5].?[0..100]});
 
-    // const file_name = "/tmp/saved-plugin-state.json";
-    // try synth_plugin.saveState(file_name);
-    // try synth_plugin.loadState(file_name);
+    const file_name = "patches/tmp/test-plugin-patch.json";
+    try synth_plugin.saveState(file_name);
+    try synth_plugin.loadState(file_name);
 }
