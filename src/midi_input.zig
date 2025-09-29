@@ -62,11 +62,14 @@ pub const MidiInput = struct {
             // Filter out noisy types
             _ = c.Pm_SetFilter(stream, c.PM_FILT_ACTIVE | c.PM_FILT_SYSEX | c.PM_FILT_CLOCK);
 
-            streams.appendAssumeCapacity(.{
+            streams.append(allocator, .{
                 .name = name,
                 .id = @intCast(i),
                 .stream = stream,
-            });
+            }) catch |append_err| {
+                _ = c.Pm_Close(stream);
+                return append_err;
+            };
         }
 
         std.debug.print("Listening on {d} input stream(s). Ctrl+C to quit.\n", .{streams.items.len});
@@ -99,7 +102,16 @@ pub const MidiInput = struct {
                 var evs: [MaxBatch]c.PmEvent = undefined;
                 const n = c.Pm_Read(s.stream, &evs, MaxBatch);
                 if (n > 0) {
-                    for (0..@intCast(n)) |j| {
+                    const event_count: usize = @intCast(n);
+                    self.midi_events.ensureUnusedCapacity(self.allocator, event_count) catch |ensure_err| {
+                        std.debug.print(
+                            "Dropping {d} MIDI event(s) from {s}: {s}\n",
+                            .{ event_count, s.name, @errorName(ensure_err) },
+                        );
+                        continue;
+                    };
+
+                    for (0..event_count) |j| {
                         const e = evs[j];
                         const ts_ms: i64 = @intCast(e.timestamp);
                         const msg: u32 = @bitCast(e.message);
@@ -164,11 +176,15 @@ test "MidiInput" {
     }
 
     {
-        const midi_device_name = midi_input.streams.items[0].name;
-        const name_part = midi_device_name[1 .. midi_device_name.len - 1];
-        var midi_input_filtered = try MidiInput.init(allocator, name_part);
-        defer midi_input_filtered.deinit();
+        if (midi_input.streams.items.len > 0) {
+            const midi_device_name = midi_input.streams.items[0].name;
+            if (midi_device_name.len >= 3) {
+                const name_part = midi_device_name[1 .. midi_device_name.len - 1];
+                var midi_input_filtered = try MidiInput.init(allocator, name_part);
+                defer midi_input_filtered.deinit();
 
-        try std.testing.expectEqual(midi_input_filtered.streams.items.len, midi_input_filtered.streams.items.len);
+                try std.testing.expect(midi_input_filtered.streams.items.len <= midi_input.streams.items.len);
+            }
+        }
     }
 }
