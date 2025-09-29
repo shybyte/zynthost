@@ -45,6 +45,8 @@ const PatchSetEntry = struct {
 
 pub const Patch = struct {
     config: std.json.Parsed(PatchConfig),
+
+    /// The complete path (not relative like in PatchSetEntry)
     path: []u8,
 
     pub fn channels(self: @This()) []ChannelConfig {
@@ -61,7 +63,15 @@ pub const PatchConfig = struct {
     channels: []ChannelConfig,
 
     pub fn load(allocator: std.mem.Allocator, path: []const u8) !std.json.Parsed(@This()) {
-        return utils.loadJSON(@This(), allocator, path);
+        const result = try utils.loadJSON(@This(), allocator, path);
+        errdefer result.deinit();
+
+        if (result.value.channels.len > 16) {
+            std.debug.print("PatchConfig \"{s}\" has too many channels ({}).\n", .{ path, result.value.channels.len });
+            return error.PatchConfigHasTooManyChannels;
+        }
+
+        return result;
     }
 };
 
