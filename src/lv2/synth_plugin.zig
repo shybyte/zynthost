@@ -49,13 +49,14 @@ pub const SynthPlugin = struct {
         self.session = null;
         self.allocator = allocator;
         self.world = world;
-        self.audio_ports = try std.ArrayList(usize).initCapacity(allocator, 100);
 
         const plugins = c.lilv_world_get_all_plugins(world);
         if (plugins == null) return error.NoPlugins;
 
         self.plugin_uri_string = try allocator.dupe(u8, plugin_uri_string);
+        errdefer allocator.free(self.plugin_uri_string);
         self.plugin_uri = c.lilv_new_uri(world, plugin_uri_string) orelse return error.BadPluginUri;
+        errdefer c.lilv_node_free(self.plugin_uri);
         self.plugin = c.lilv_plugins_get_by_uri(plugins, self.plugin_uri) orelse return error.PluginNotFound;
 
         self.instance = c.lilv_plugin_instantiate(self.plugin, sample_rate, &urid_map_features);
@@ -91,6 +92,8 @@ pub const SynthPlugin = struct {
         }
 
         const nports: u32 = @intCast(c.lilv_plugin_get_num_ports(plugin));
+        self.audio_ports = try std.ArrayList(usize).initCapacity(self.allocator, nports);
+        errdefer self.audio_ports.deinit(self.allocator);
 
         // temp storage for audio/control ports
         const allocator = self.allocator;
@@ -207,8 +210,9 @@ pub const SynthPlugin = struct {
     }
 
     pub fn showUI(self: *Self) !void {
-        self.session = .{ .plugin = self };
-        try self.session.?.init();
+        var session: UiSession = .{ .plugin = self };
+        try session.init();
+        self.session = session;
     }
 
     fn listUIs(self: *Self) !void {
@@ -675,8 +679,9 @@ export fn urid_map_func(handle: ?*anyopaque, uri: ?[*:0]const u8) callconv(.c) c
         if (table.get(s)) |found| return found;
         // Copy the key because s points to plugin/lilv-owned memory
         const dup = std.heap.page_allocator.dupeZ(u8, s) catch return 0;
+        errdefer std.heap.page_allocator.free(dup);
         const new_id: c.LV2_URID = @intCast(table.count() + 1);
-        _ = table.put(dup, new_id) catch return 0;
+        table.put(dup, new_id) catch return 0;
         return new_id;
     } else {
         unreachable;
