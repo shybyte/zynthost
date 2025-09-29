@@ -46,8 +46,12 @@ pub const MidiSequence = struct {
         body_ptr.pad = 0;
     }
 
-    pub fn addEvent(self: *MidiSequence, time_frames: i64, data: []const u8) void {
-        std.debug.assert(data.len == 3);
+    pub fn addEvent(self: *MidiSequence, time_frames: i64, data: []const u8) Error!void {
+        if (data.len == 0 or data.len > std.math.maxInt(u32)) {
+            return Error.InvalidMidiSize;
+        }
+
+        const event_body_size: u32 = @intCast(data.len);
 
         const seq_ptr = self.seq();
         const total_len = self.buf.len;
@@ -64,13 +68,15 @@ pub const MidiSequence = struct {
         const header_sz = @sizeOf(EventHeader);
         const unaligned = header_sz + data.len;
         const aligned = roundUp8(unaligned);
-        std.debug.assert(write_off + aligned <= total_len);
+        if (write_off + aligned > total_len) {
+            return Error.NoSpace;
+        }
 
         var p: [*]u8 = self.buf.ptr + write_off;
 
         var eh = EventHeader{
             .time = time_frames,
-            .body_size = @intCast(data.len),
+            .body_size = event_body_size,
             .body_type = self.midi_event_urid,
         };
         @memcpy(p[0..header_sz], std.mem.asBytes(&eh));
@@ -82,7 +88,12 @@ pub const MidiSequence = struct {
         const pad = aligned - unaligned;
         if (pad > 0) @memset(p[0..pad], 0);
 
-        seq_ptr.atom.size = @intCast(body_size + aligned);
+        const new_body_size = body_size + aligned;
+        if (new_body_size > std.math.maxInt(u32)) {
+            return Error.NoSpace;
+        }
+
+        seq_ptr.atom.size = @intCast(new_body_size);
     }
 
     fn roundUp8(n: usize) usize {
@@ -99,8 +110,8 @@ pub const MidiSequence = struct {
 test "MidiSequence frames" {
     var backing: [1024]u8 align(8) = undefined;
     var ms = MidiSequence.init(backing[0..], 1, 2, 3);
-    ms.addEvent(128, &[_]u8{ 0x90, 60, 100 });
-    ms.addEvent(512, &[_]u8{ 0x80, 60, 64 });
+    try ms.addEvent(128, &[_]u8{ 0x90, 60, 100 });
+    try ms.addEvent(512, &[_]u8{ 0x80, 60, 64 });
     ms.clear();
     const seq_ptr = ms.seq();
     try std.testing.expect(@as(usize, @intCast(seq_ptr.atom.size)) == @sizeOf(c.LV2_Atom_Sequence_Body));
@@ -125,8 +136,8 @@ test "MidiSequence adds two MIDI events with correct layout" {
     const ev1 = [_]u8{ 0x90, 60, 100 };
     const ev2 = [_]u8{ 0x80, 60, 0 };
 
-    seq.addEvent(0, &ev1);
-    seq.addEvent(480, &ev2);
+    try seq.addEvent(0, &ev1);
+    try seq.addEvent(480, &ev2);
 
     const seq_ptr: *c.LV2_Atom_Sequence = seq.seq();
 
@@ -186,4 +197,42 @@ test "MidiSequence adds two MIDI events with correct layout" {
     // Finally, verify the total bytes used equals the buffer end for this case:
     // LV2_Atom (8) + atom.size (56) = 64.
     try std.testing.expectEqual(@as(usize, 64), @sizeOf(c.LV2_Atom) + @as(usize, seq_ptr.atom.size));
+}
+
+test "MidiSequence accepts variable-sized MIDI messages" {
+    const URID_SEQUENCE: u32 = 1;
+    const URID_MIDI_EVENT: u32 = 2;
+    const URID_TIME_FRAMES: u32 = 3;
+
+    var raw_buf: [64]u8 align(@alignOf(c.LV2_Atom_Sequence)) = undefined;
+    var seq = MidiSequence.init(raw_buf[0..], URID_SEQUENCE, URID_MIDI_EVENT, URID_TIME_FRAMES);
+
+    try seq.addEvent(0, &[_]u8{0xF8});
+    try seq.addEvent(240, &[_]u8{ 0xC0, 42 });
+
+    const seq_ptr: *c.LV2_Atom_Sequence = seq.seq();
+    try std.testing.expectEqual(@as(u32, 56), seq_ptr.atom.size);
+}
+
+test "MidiSequence rejects empty MIDI messages" {
+    const URID_SEQUENCE: u32 = 1;
+    const URID_MIDI_EVENT: u32 = 2;
+    const URID_TIME_FRAMES: u32 = 3;
+
+    var raw_buf: [64]u8 align(@alignOf(c.LV2_Atom_Sequence)) = undefined;
+    var seq = MidiSequence.init(raw_buf[0..], URID_SEQUENCE, URID_MIDI_EVENT, URID_TIME_FRAMES);
+
+    try std.testing.expectError(MidiSequence.Error.InvalidMidiSize, seq.addEvent(0, &[_]u8{}));
+}
+
+test "MidiSequence signals NoSpace when buffer is full" {
+    const URID_SEQUENCE: u32 = 1;
+    const URID_MIDI_EVENT: u32 = 2;
+    const URID_TIME_FRAMES: u32 = 3;
+
+    var raw_buf: [40]u8 align(@alignOf(c.LV2_Atom_Sequence)) = undefined;
+    var seq = MidiSequence.init(raw_buf[0..], URID_SEQUENCE, URID_MIDI_EVENT, URID_TIME_FRAMES);
+
+    try seq.addEvent(0, &[_]u8{ 0x90, 60, 100 });
+    try std.testing.expectError(MidiSequence.Error.NoSpace, seq.addEvent(120, &[_]u8{ 0x80, 60, 0 }));
 }

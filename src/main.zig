@@ -175,7 +175,12 @@ fn routeMidiEvents(channel: *Channel, midi_events: []const MidiMessage) void {
         if (event_channel != channel.midi_channel) continue;
 
         std.debug.print("MidiMessage: {f}\n", .{midi_event});
-        channel.plugin.midi_sequence.addEvent(0, &midi_event.data);
+        channel.plugin.midi_sequence.addEvent(0, midi_event.data[0..]) catch |err| {
+            std.debug.print(
+                "Dropping MIDI event for channel {d}: {s}\n",
+                .{ @as(u8, event_channel), @errorName(err) },
+            );
+        };
     }
 }
 

@@ -808,7 +808,7 @@ test "SynthPlugin initialization and deinitialization" {
     try std.testing.expectEqual(5, synth_plugin.audio_ports.items[0]);
     try std.testing.expectEqual(6, synth_plugin.audio_ports.items[1]);
 
-    synth_plugin.midi_sequence.addEvent(0, &[_]u8{ 0x90, 60, 127 });
+    try synth_plugin.midi_sequence.addEvent(0, &[_]u8{ 0x90, 60, 127 });
     synth_plugin.run(256);
 
     std.debug.print(" {any}\n", .{synth_plugin.audio_out_bufs[5].?[0..100]});
