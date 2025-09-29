@@ -36,7 +36,7 @@ pub const SynthPlugin = struct {
     backing: [1024]u8 align(8),
     midi_sequence: MidiSequence,
 
-    session: UiSession,
+    session: ?UiSession,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -46,6 +46,7 @@ pub const SynthPlugin = struct {
         const self = try allocator.create(SynthPlugin);
         errdefer allocator.destroy(self);
 
+        self.session = null;
         self.allocator = allocator;
         self.world = world;
         self.audio_ports = try std.ArrayList(usize).initCapacity(allocator, 100);
@@ -93,19 +94,32 @@ pub const SynthPlugin = struct {
 
         // temp storage for audio/control ports
         const allocator = self.allocator;
+
         self.audio_in_bufs = try allocator.alloc(?[]f32, nports);
         // const audio_in_bufs: []?[]f32 = try allocator.alloc(?[]f32, nports);
         @memset(self.audio_in_bufs, null);
-        // defer allocator.free(self.audio_in_bufs);
+        errdefer {
+            for (self.audio_in_bufs) |audio_buf_opt| {
+                if (audio_buf_opt) |audio_buf| {
+                    self.allocator.free(audio_buf);
+                }
+            }
+            allocator.free(self.audio_in_bufs);
+        }
+
         self.audio_out_bufs = try allocator.alloc(?[]f32, nports);
         @memset(self.audio_out_bufs, null);
-        // defer allocator.free(audio_out_bufs);
-        self.control_in_vals = try allocator.alloc(f32, nports);
-        // defer allocator.free(control_in_vals);
+        errdefer {
+            for (self.audio_out_bufs) |audio_buf_opt| {
+                if (audio_buf_opt) |audio_buf| {
+                    self.allocator.free(audio_buf);
+                }
+            }
+            allocator.free(self.audio_out_bufs);
+        }
 
-        // initialize to empty
-        // for (audio_in_bufs) |*slot| slot.* = &[_]f32{};
-        // for (audio_out_bufs) |*slot| slot.* = &[_]f32{};
+        self.control_in_vals = try allocator.alloc(f32, nports);
+        errdefer allocator.free(self.control_in_vals);
         @memset(self.control_in_vals, 0);
 
         // pick a MIDI input port
@@ -192,10 +206,9 @@ pub const SynthPlugin = struct {
         c.lilv_instance_connect_port(self.instance, midi_in_port_index.?, self.midi_sequence.seq());
     }
 
-    pub fn showUI(self: *Self) !*UiSession {
-        self.session.plugin = self;
-        try self.session.init();
-        return &self.session;
+    pub fn showUI(self: *Self) !void {
+        self.session = .{ .plugin = self };
+        try self.session.?.init();
     }
 
     fn listUIs(self: *Self) !void {
@@ -237,7 +250,7 @@ pub const SynthPlugin = struct {
         // std.debug.print("Test {any}\n", .{self.instance});
     }
 
-    pub fn saveState(self: *Self, file_path: []const u8) !void {
+    pub fn saveState(self: *Self, file_path: [:0]const u8) !void {
         const dir = try std.heap.page_allocator.dupeZ(u8, std.fs.path.dirname(file_path) orelse "");
 
         std.debug.print("saveState {s} {s}\n", .{ dir, file_path });
@@ -325,6 +338,11 @@ pub const SynthPlugin = struct {
 
     pub fn deinit(self: *Self) void {
         std.debug.print("deinit {s} ... \n", .{self.plugin_uri_string});
+
+        if (self.session) |*running_session| {
+            running_session.deinit();
+        }
+
         c.lilv_instance_deactivate(self.instance);
         c.lilv_instance_free(self.instance);
         c.lilv_node_free(self.plugin_uri);
@@ -507,14 +525,14 @@ fn asExt(widget_ptr: ?*anyopaque) *LV2_External_UI_Widget {
 pub const UiSession = struct {
     closed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     plugin: *SynthPlugin,
-    ext: *LV2_External_UI_Widget,
-    suil_instance: *c.SuilInstance,
+    ext: *LV2_External_UI_Widget = undefined,
+    suil_instance: *c.SuilInstance = undefined,
 
-    host: *c.SuilHost,
-    ext_host: LV2_External_UI_Host,
-    ext_host_feat: c.LV2_Feature,
-    instance_access_feat: c.LV2_Feature,
-    features: [3]?*const c.LV2_Feature,
+    host: *c.SuilHost = undefined,
+    ext_host: LV2_External_UI_Host = undefined,
+    ext_host_feat: c.LV2_Feature = undefined,
+    instance_access_feat: c.LV2_Feature = undefined,
+    features: [3]?*const c.LV2_Feature = undefined,
 
     pub fn init(self: *UiSession) !void {
         const synth_plugin = self.plugin;

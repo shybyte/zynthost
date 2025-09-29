@@ -88,7 +88,7 @@ pub fn main() !void {
         defer audio_output.stopAudio();
 
         for (channels.items) |channel| {
-            _ = try channel.plugin.showUI();
+            try channel.plugin.showUI();
         }
 
         var stdin_file = std.fs.File.stdin();
@@ -114,10 +114,6 @@ pub fn main() !void {
                 quit = true;
                 break;
             }
-        }
-
-        for (channels.items) |channel| {
-            channel.plugin.session.deinit();
         }
     }
 

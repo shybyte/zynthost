@@ -121,6 +121,7 @@ pub fn build(b: *std.Build) void {
         test_exe.linkSystemLibrary("lilv-0");
         test_exe.linkSystemLibrary("portaudio");
         test_exe.linkSystemLibrary("portmidi");
+        test_exe.linkSystemLibrary("suil-0");
 
         const cfg = b.addOptions();
         cfg.addOption(?[]const u8, "only", only);
