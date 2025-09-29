@@ -1,5 +1,11 @@
 .zig-cache/
+
+# Created by Codex somtimes
+zig-cache
+
 zig-out/
+
 *.o
+
 .private
 *.local.json

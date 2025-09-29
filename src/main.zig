@@ -169,10 +169,13 @@ fn audioCallback(
 
 fn routeMidiEvents(channel: *Channel, midi_events: []const MidiMessage) void {
     for (midi_events) |midi_event| {
-        if (midi_event.program() == null and midi_event.channel() == channel.midi_channel) {
-            std.debug.print("MidiMessage: {f}\n", .{midi_event});
-            channel.plugin.midi_sequence.addEvent(0, &midi_event.data);
-        }
+        if (midi_event.program() != null) continue;
+
+        const event_channel = midi_event.channel() orelse continue;
+        if (event_channel != channel.midi_channel) continue;
+
+        std.debug.print("MidiMessage: {f}\n", .{midi_event});
+        channel.plugin.midi_sequence.addEvent(0, &midi_event.data);
     }
 }
 
