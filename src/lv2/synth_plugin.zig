@@ -4,15 +4,13 @@ const host = @import("host.zig");
 const c = host.c;
 
 const MidiSequence = @import("midi_sequence.zig").MidiSequence;
-const utils = @import("utils.zig");
-const ui_session = @import("ui_session.zig");
+const UiSession = @import("ui_session.zig").UiSession;
 
 const sample_rate: f64 = 48000.0;
 pub const max_frames: u32 = 4096;
 
 pub const SynthPlugin = struct {
     const Self = @This();
-    const UiSession = ui_session.UiSessionType(Self);
 
     allocator: std.mem.Allocator,
     world: *c.LilvWorld,
@@ -206,9 +204,17 @@ pub const SynthPlugin = struct {
     }
 
     pub fn showUI(self: *Self) !void {
-        self.session = UiSession{ .plugin = self };
+        self.session = UiSession{};
         errdefer self.session = null;
-        try self.session.?.init();
+        try self.session.?.init(.{
+            .allocator = self.allocator,
+            .world = self.world,
+            .plugin_uri_string = self.plugin_uri_string,
+            .plugin_uri = self.plugin_uri,
+            .plugin = self.plugin,
+            .instance = self.instance,
+            .control_in_vals = self.control_in_vals,
+        });
     }
 
     pub fn run(self: *Self, frames: u32) void {
