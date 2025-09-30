@@ -431,10 +431,6 @@ fn get_value(port_symbol: [*c]const u8, user_data: ?*anyopaque, size: [*c]u32, v
     // return null;
 }
 
-fn cstrZ(ptr: [*:0]const u8) []const u8 {
-    return std.mem.sliceTo(ptr, 0);
-}
-
 // Matches SuilWriteFunc
 fn uiWrite(
     controller: ?*anyopaque,
@@ -604,7 +600,7 @@ pub const UiSession = struct {
             &self.features,
         ) orelse {
             // suil prints an error already; add context:
-            std.log.err("suil_instance_new failed for UI {s} in {s}", .{ cstrZ(ui_uri_c), cstrZ(binary_path_c) });
+            std.log.err("suil_instance_new failed for UI {s} in {s}", .{ std.mem.span(ui_uri_c), std.mem.span(binary_path_c) });
             return error.SomeError;
         };
         errdefer c.suil_instance_free(suil_instance);
