@@ -39,9 +39,13 @@ pub fn main() !void {
     defer patch_set.deinit();
     std.debug.print(" successfully.", .{});
 
+    const app_config = try AppConfig.loadWithFallback(allocator);
+    defer app_config.deinit();
+    var midi_input = try MidiInput.init(allocator, app_config.value.midi_name_filter);
+    defer midi_input.deinit();
+
     const host_instance = try lv2_host.initGlobal(allocator);
     defer lv2_host.deinitGlobal();
-
     const world = host_instance.worldPtr();
 
     var midi_program = patch_set.value.patches[0].program;
@@ -75,12 +79,6 @@ pub fn main() !void {
                 channel.plugin.deinit();
             }
         }
-
-        const app_config = try AppConfig.loadWithFallback(allocator);
-        defer app_config.deinit();
-
-        var midi_input = try MidiInput.init(std.heap.page_allocator, app_config.value.midi_name_filter);
-        defer midi_input.deinit();
 
         var audio_callback_user_data = AudioCallbackUserData{
             .patch_config = &patch.config.value,
