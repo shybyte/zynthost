@@ -8,6 +8,7 @@ const UiSession = @import("ui_session.zig").UiSession;
 
 const sample_rate: f64 = 48000.0;
 pub const max_frames: u32 = 4096;
+const midi_sequence_capacity: usize = 1024;
 
 pub const SynthPlugin = struct {
     const Self = @This();
@@ -25,7 +26,6 @@ pub const SynthPlugin = struct {
     audio_ports: std.ArrayList(usize),
 
     control_in_vals: []f32,
-    backing: [1024]u8 align(8),
     midi_sequence: MidiSequence,
 
     session: ?UiSession,
@@ -196,7 +196,8 @@ pub const SynthPlugin = struct {
         const midi_MidiEvent_urid = lv2_host.mapUri("http://lv2plug.in/ns/ext/midi#MidiEvent");
         const midi_timeframe_urid = lv2_host.mapUri("http://lv2plug.in/ns/ext/time#frame");
 
-        self.midi_sequence = MidiSequence.init(self.backing[0..], atom_Sequence_urid, midi_MidiEvent_urid, midi_timeframe_urid);
+        self.midi_sequence = try MidiSequence.init(self.allocator, midi_sequence_capacity, atom_Sequence_urid, midi_MidiEvent_urid, midi_timeframe_urid);
+        errdefer self.midi_sequence.deinit();
         // try self.midi_sequence.addEvent(0, &[_]u8{ 0x90, 60, 127 });
 
         // Connect the MIDI sequence to the discovered MIDI input port
@@ -339,6 +340,7 @@ pub const SynthPlugin = struct {
         self.audio_ports.deinit(self.allocator);
 
         self.allocator.free(self.control_in_vals);
+        self.midi_sequence.deinit();
 
         std.debug.print("deinit {s} done \n", .{self.plugin_uri_string});
         self.allocator.free(self.plugin_uri_string);
@@ -383,7 +385,7 @@ fn setPortValueBySymbol(
 
     const idx = findPortIndexBySymbol(self, port_symbol) orelse return;
 
-    // Bounds-checked write into the backing buffer already connected to the plugin
+    // Bounds-checked write into the buffer already connected to the plugin
     if (idx < self.control_in_vals.len) {
         const fptr: *const f32 = @ptrCast(@alignCast(value.?));
         self.control_in_vals[idx] = fptr.*;

@@ -7,18 +7,24 @@ const c = @cImport({
 });
 
 pub const MidiSequence = struct {
-    buf: []u8,
+    allocator: std.mem.Allocator,
+    buf: []align(@alignOf(c.LV2_Atom_Sequence)) u8,
     atom_sequence_urid: u32,
     midi_event_urid: u32,
     time_frames_urid: u32,
 
     pub fn init(
-        buf: []u8,
+        allocator: std.mem.Allocator,
+        capacity: usize,
         atom_sequence_urid: u32,
         midi_event_urid: u32,
         time_frames_urid: u32,
-    ) MidiSequence {
+    ) !MidiSequence {
+        const buf = try allocator.alignedAlloc(u8, std.mem.Alignment.of(c.LV2_Atom_Sequence), capacity);
+        errdefer allocator.free(buf);
+
         var self = MidiSequence{
+            .allocator = allocator,
             .buf = buf,
             .atom_sequence_urid = atom_sequence_urid,
             .midi_event_urid = midi_event_urid,
@@ -26,6 +32,10 @@ pub const MidiSequence = struct {
         };
         self.clear();
         return self;
+    }
+
+    pub fn deinit(self: *MidiSequence) void {
+        self.allocator.free(self.buf);
     }
 
     pub fn seq(self: *MidiSequence) *c.LV2_Atom_Sequence {
@@ -108,8 +118,8 @@ pub const MidiSequence = struct {
 };
 
 test "MidiSequence frames" {
-    var backing: [1024]u8 align(8) = undefined;
-    var ms = MidiSequence.init(backing[0..], 1, 2, 3);
+    var ms = try MidiSequence.init(std.testing.allocator, 1024, 1, 2, 3);
+    defer ms.deinit();
     try ms.addEvent(128, &[_]u8{ 0x90, 60, 100 });
     try ms.addEvent(512, &[_]u8{ 0x80, 60, 64 });
     ms.clear();
@@ -125,11 +135,8 @@ test "MidiSequence adds two MIDI events with correct layout" {
 
     // Each event occupies: header(16) + data(3) -> 19, rounded up to 24 bytes.
     // Total buffer needed: LV2_Atom(8) + Sequence_Body(8) + 2 * 24 = 64 bytes.
-    // Make sure the buffer is aligned for the C structs we’ll cast to.
-    var raw_buf: [64]u8 align(@alignOf(c.LV2_Atom_Sequence)) = undefined;
-    const buf = raw_buf[0..];
-
-    var seq = MidiSequence.init(buf, URID_SEQUENCE, URID_MIDI_EVENT, URID_TIME_FRAMES);
+    var seq = try MidiSequence.init(std.testing.allocator, 64, URID_SEQUENCE, URID_MIDI_EVENT, URID_TIME_FRAMES);
+    defer seq.deinit();
 
     // Two MIDI messages: Note On (ch 1, note 60, vel 100) at t=0,
     // then Note Off (ch 1, note 60, vel 0) at t=480 frames.
@@ -204,8 +211,8 @@ test "MidiSequence accepts variable-sized MIDI messages" {
     const URID_MIDI_EVENT: u32 = 2;
     const URID_TIME_FRAMES: u32 = 3;
 
-    var raw_buf: [64]u8 align(@alignOf(c.LV2_Atom_Sequence)) = undefined;
-    var seq = MidiSequence.init(raw_buf[0..], URID_SEQUENCE, URID_MIDI_EVENT, URID_TIME_FRAMES);
+    var seq = try MidiSequence.init(std.testing.allocator, 64, URID_SEQUENCE, URID_MIDI_EVENT, URID_TIME_FRAMES);
+    defer seq.deinit();
 
     try seq.addEvent(0, &[_]u8{0xF8});
     try seq.addEvent(240, &[_]u8{ 0xC0, 42 });
@@ -219,8 +226,8 @@ test "MidiSequence rejects empty MIDI messages" {
     const URID_MIDI_EVENT: u32 = 2;
     const URID_TIME_FRAMES: u32 = 3;
 
-    var raw_buf: [64]u8 align(@alignOf(c.LV2_Atom_Sequence)) = undefined;
-    var seq = MidiSequence.init(raw_buf[0..], URID_SEQUENCE, URID_MIDI_EVENT, URID_TIME_FRAMES);
+    var seq = try MidiSequence.init(std.testing.allocator, 64, URID_SEQUENCE, URID_MIDI_EVENT, URID_TIME_FRAMES);
+    defer seq.deinit();
 
     try std.testing.expectError(MidiSequence.Error.InvalidMidiSize, seq.addEvent(0, &[_]u8{}));
 }
@@ -230,8 +237,8 @@ test "MidiSequence signals NoSpace when buffer is full" {
     const URID_MIDI_EVENT: u32 = 2;
     const URID_TIME_FRAMES: u32 = 3;
 
-    var raw_buf: [40]u8 align(@alignOf(c.LV2_Atom_Sequence)) = undefined;
-    var seq = MidiSequence.init(raw_buf[0..], URID_SEQUENCE, URID_MIDI_EVENT, URID_TIME_FRAMES);
+    var seq = try MidiSequence.init(std.testing.allocator, 40, URID_SEQUENCE, URID_MIDI_EVENT, URID_TIME_FRAMES);
+    defer seq.deinit();
 
     try seq.addEvent(0, &[_]u8{ 0x90, 60, 100 });
     try std.testing.expectError(MidiSequence.Error.NoSpace, seq.addEvent(120, &[_]u8{ 0x80, 60, 0 }));
