@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const synth_plugin_mod = @import("lv2/synth_plugin.zig");
+const lv2_host = @import("lv2/host.zig");
 const SynthPlugin = synth_plugin_mod.SynthPlugin;
 const MidiInput = @import("./midi_input.zig").MidiInput;
 const MidiMessage = @import("./midi.zig").MidiMessage;
@@ -38,8 +39,10 @@ pub fn main() !void {
     defer patch_set.deinit();
     std.debug.print(" successfully.", .{});
 
-    const world = try synth_plugin_mod.create_world(allocator);
-    defer synth_plugin_mod.free_world();
+    const host_instance = try lv2_host.initGlobal(allocator);
+    defer lv2_host.deinitGlobal();
+
+    const world = host_instance.worldPtr();
 
     var midi_program = patch_set.value.patches[0].program;
     new_midi_program.store(midi_program, .seq_cst);

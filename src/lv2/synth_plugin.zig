@@ -1,15 +1,7 @@
 const std = @import("std");
+const host = @import("host.zig");
 
-const c = @cImport({
-    @cInclude("lilv-0/lilv/lilv.h");
-    @cInclude("lv2/core/lv2.h");
-    @cInclude("lv2/atom/atom.h");
-    @cInclude("lv2/midi/midi.h");
-    @cInclude("lv2/urid/urid.h");
-    @cInclude("lv2/ui/ui.h");
-    @cInclude("suil-0/suil/suil.h");
-    @cInclude("dlfcn.h");
-});
+const c = host.c;
 
 const MidiSequence = @import("midi_sequence.zig").MidiSequence;
 const utils = @import("utils.zig");
@@ -59,7 +51,8 @@ pub const SynthPlugin = struct {
         errdefer c.lilv_node_free(self.plugin_uri);
         self.plugin = c.lilv_plugins_get_by_uri(plugins, self.plugin_uri) orelse return error.PluginNotFound;
 
-        self.instance = c.lilv_plugin_instantiate(self.plugin, sample_rate, &urid_map_features);
+        const lv2_host = host.get();
+        self.instance = c.lilv_plugin_instantiate(self.plugin, sample_rate, lv2_host.featurePtr());
         if (self.instance == null) return error.InstanceFailed;
 
         try connectPorts(self, world, self.plugin);
@@ -68,6 +61,7 @@ pub const SynthPlugin = struct {
     }
 
     fn connectPorts(self: *Self, world: *c.LilvWorld, plugin: ?*const c.LilvPlugin) !void {
+        const lv2_host = host.get();
         // ----------------------------
         // 4) Discover ports & connect minimal buffers
         //    - find MIDI input Atom port
@@ -198,9 +192,9 @@ pub const SynthPlugin = struct {
         c.lilv_instance_activate(self.instance);
 
         // Minimal URID mapping for types we need
-        const atom_Sequence_urid = urid_map_func(null, "http://lv2plug.in/ns/ext/atom#Sequence");
-        const midi_MidiEvent_urid = urid_map_func(null, "http://lv2plug.in/ns/ext/midi#MidiEvent");
-        const midi_timeframe_urid = urid_map_func(null, "http://lv2plug.in/ns/ext/time#frame");
+        const atom_Sequence_urid = lv2_host.mapUri("http://lv2plug.in/ns/ext/atom#Sequence");
+        const midi_MidiEvent_urid = lv2_host.mapUri("http://lv2plug.in/ns/ext/midi#MidiEvent");
+        const midi_timeframe_urid = lv2_host.mapUri("http://lv2plug.in/ns/ext/time#frame");
 
         self.midi_sequence = MidiSequence.init(self.backing[0..], atom_Sequence_urid, midi_MidiEvent_urid, midi_timeframe_urid);
         // try self.midi_sequence.addEvent(0, &[_]u8{ 0x90, 60, 127 });
@@ -255,6 +249,7 @@ pub const SynthPlugin = struct {
     }
 
     pub fn saveState(self: *Self, file_path: [:0]const u8) !void {
+        const lv2_host = host.get();
         const dir = try self.allocator.dupeZ(u8, std.fs.path.dirname(file_path) orelse "");
         defer self.allocator.free(dir);
 
@@ -263,7 +258,7 @@ pub const SynthPlugin = struct {
         const state = c.lilv_state_new_from_instance(
             self.plugin,
             self.instance,
-            &urid_map, // LV2_URID_Map*
+            lv2_host.uridMap(),
             dir,
             dir,
             dir,
@@ -285,8 +280,8 @@ pub const SynthPlugin = struct {
         // Save: Lilv will create a .ttl, and possibly a directory for blobs
         const ok = c.lilv_state_save(
             self.world,
-            &urid_map,
-            &urid_un_map,
+            lv2_host.uridMap(),
+            lv2_host.uridUnmap(),
             state,
             null, // uri for the state (optional, host-specific)
             dir,
@@ -300,6 +295,7 @@ pub const SynthPlugin = struct {
     }
 
     pub fn loadState(self: *Self, file_path: [:0]const u8) !void {
+        const lv2_host = host.get();
         const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
             std.debug.print("Can't open file '{s}'.\n", .{file_path});
             return err;
@@ -308,7 +304,7 @@ pub const SynthPlugin = struct {
 
         const state = c.lilv_state_new_from_file(
             self.world,
-            &urid_map,
+            lv2_host.uridMap(),
             null,
             file_path,
         );
@@ -425,7 +421,7 @@ fn get_value(port_symbol: [*c]const u8, user_data: ?*anyopaque, size: [*c]u32, v
     // _ = size;
     // _ = value_type;
     std.debug.print("get_value {s}\n", .{port_symbol});
-    const float_id = urid_map_func(null, "http://lv2plug.in/ns/ext/atom#Float");
+    const float_id = host.get().mapUri("http://lv2plug.in/ns/ext/atom#Float");
     // _ = port_symbol;
     value_type.* = float_id;
     size.* = @sizeOf(f32);
@@ -647,172 +643,15 @@ fn on_ui_closed(controller: ?*anyopaque) callconv(.c) void {
     }
 }
 
-// ===========================================================
-// Simple global URI→URID map for LV2_URID_Map (host feature)
-// ===========================================================
-var uri_table: ?std.StringHashMap(c_uint) = null;
-
-fn initUridTable(allocator: std.mem.Allocator) !void {
-    if (uri_table != null) return;
-    uri_table = std.StringHashMap(c_uint).init(allocator);
-}
-
-fn deinitUridTable() void {
-    if (uri_table) |*table| {
-        var it = table.iterator();
-        while (it.next()) |entry| {
-            const key_slice = entry.key_ptr.*;
-            const free_len = key_slice.len + 1; // includes NUL terminator from dupeZ
-            const key_ptr_mut: [*]u8 = @constCast(key_slice.ptr);
-            std.heap.page_allocator.free(key_ptr_mut[0..free_len]);
-        }
-        table.deinit();
-        uri_table = null;
-    }
-}
-
-export fn urid_map_func(handle: ?*anyopaque, uri: ?[*:0]const u8) callconv(.c) c.LV2_URID {
-    _ = handle;
-    const s = std.mem.span(uri.?);
-
-    if (uri_table) |*table| {
-        if (table.get(s)) |found| return found;
-        // Copy the key because s points to plugin/lilv-owned memory
-        const dup = std.heap.page_allocator.dupeZ(u8, s) catch return 0;
-        errdefer std.heap.page_allocator.free(dup);
-        const new_id: c.LV2_URID = @intCast(table.count() + 1);
-        table.put(dup, new_id) catch return 0;
-        return new_id;
-    } else {
-        unreachable;
-    }
-}
-
-export fn urid_unmap_func(handle: ?*anyopaque, urid: c.LV2_URID) callconv(.c) ?[*:0]const u8 {
-    _ = handle;
-
-    var it = (uri_table orelse return null).iterator();
-    while (it.next()) |entry| {
-        if (entry.value_ptr.* == urid) {
-            // The key we stored is a dup’d string; ensure it is NUL-terminated
-            // If you used dupeZ, you can safely cast:
-            const z: [:0]const u8 = @ptrCast(entry.key_ptr.*);
-            return z.ptr;
-        }
-    }
-    return null;
-}
-
-var urid_map: c.LV2_URID_Map = .{
-    .handle = null,
-    .map = urid_map_func,
-};
-
-var urid_un_map: c.LV2_URID_Unmap = .{
-    .handle = null,
-    .unmap = urid_unmap_func,
-};
-
-var urid_map_feature: c.LV2_Feature = .{
-    .URI = "http://lv2plug.in/ns/ext/urid#map",
-    .data = &urid_map,
-};
-
-var urid_map_features = [_]?*const c.LV2_Feature{
-    &urid_map_feature,
-    null, // terminator
-};
-
-var world_global: *c.LilvWorld = undefined;
-
-pub fn create_world(allocator: std.mem.Allocator) !*c.LilvWorld {
-    world_global = c.lilv_world_new() orelse return error.LilvWorldNewFailed;
-    errdefer free_world();
-
-    c.lilv_world_load_all(world_global);
-
-    try initUridTable(allocator); // initializes global URI→URID map used by the C callback
-
-    return world_global;
-}
-
-pub fn free_world() void {
-    c.lilv_world_free(world_global);
-    deinitUridTable();
-}
-
-fn listPlugins(world: *c.LilvWorld) void {
-    const plugins = c.lilv_world_get_all_plugins(world);
-    if (plugins == null) {
-        std.debug.print("No LV2 plugins found\n", .{});
-        c.lilv_world_free(world);
-        return;
-    }
-
-    const iter = c.lilv_plugins_begin(plugins);
-    var it = iter;
-
-    while (!c.lilv_plugins_is_end(plugins, it)) : (it = c.lilv_plugins_next(plugins, it)) {
-        const plugin = c.lilv_plugins_get(plugins, it);
-        if (plugin == null) continue;
-
-        // --- URI ---
-        const uri_c = c.lilv_node_as_string(c.lilv_plugin_get_uri(plugin));
-        if (uri_c != null) {
-            std.debug.print("URI: {s}\n", .{std.mem.span(uri_c)});
-        } else {
-            std.debug.print("URI: (unknown)\n", .{});
-        }
-
-        // --- Name ---
-        const name_node = c.lilv_plugin_get_name(plugin);
-        if (name_node != null) {
-            const name_c = c.lilv_node_as_string(name_node);
-            std.debug.print("  Name: {s}\n", .{std.mem.span(name_c)});
-        } else {
-            std.debug.print("  Name: Unknown\n", .{});
-        }
-
-        // --- Class label ---
-        const class_ptr = c.lilv_plugin_get_class(plugin);
-        if (class_ptr != null) {
-            const label_node = c.lilv_plugin_class_get_label(class_ptr);
-            if (label_node != null) {
-                const label_c = c.lilv_node_as_string(label_node);
-                std.debug.print("  Class: {s}\n", .{std.mem.span(label_c)});
-            } else {
-                std.debug.print("  Class: Unknown\n", .{});
-            }
-        } else {
-            std.debug.print("  Class: Unknown\n", .{});
-        }
-
-        // --- Library (shared object) URI and best-effort file path ---
-        const lib_node = c.lilv_plugin_get_library_uri(plugin);
-        if (lib_node != null) {
-            const lib_uri_c = c.lilv_node_as_string(lib_node);
-            const lib_uri = std.mem.span(lib_uri_c);
-            std.debug.print("  Library URI: {s}\n", .{lib_uri});
-
-            // Best-effort path view if it's a file:// URI (no percent-decoding here).
-            if (std.mem.startsWith(u8, lib_uri, "file://")) {
-                const path = lib_uri["file://".len..];
-                std.debug.print("  Library Path (best-effort): {s}\n", .{path});
-            }
-        } else {
-            std.debug.print("  Library: (unknown)\n", .{});
-        }
-
-        std.debug.print("\n", .{});
-    }
-}
 // ---- Tests ----
 
 test "SynthPlugin" {
     const allocator = std.testing.allocator;
 
-    const world = try create_world(allocator);
-    defer free_world();
+    const lv2_host = try host.initGlobal(allocator);
+    defer host.deinitGlobal();
+
+    const world = lv2_host.worldPtr();
 
     // listPlugins(world.?);
 
