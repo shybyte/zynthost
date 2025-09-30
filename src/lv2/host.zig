@@ -11,6 +11,7 @@ pub const c = @cImport({
     @cInclude("dlfcn.h");
 });
 
+// This is not really threadsafe, but probably fine for now.
 const UriTable = std.StringHashMap(c_uint);
 
 pub const Lv2Host = struct {
@@ -56,12 +57,13 @@ pub const Lv2Host = struct {
         const slice = std.mem.span(uri);
         if (self.uri_table.get(slice)) |found| return found;
 
-        const dup = std.heap.page_allocator.dupeZ(u8, slice) catch return 0;
-        errdefer std.heap.page_allocator.free(dup);
+        // This is not realtimesafe but probably it's unlikely to cause problems.
+        const dup = self.allocator.dupeZ(u8, slice) catch return 0;
+        errdefer self.allocator.free(dup);
 
         const new_id: c.LV2_URID = @intCast(self.uri_table.count() + 1);
         self.uri_table.put(dup, new_id) catch {
-            std.heap.page_allocator.free(dup);
+            self.allocator.free(dup);
             return 0;
         };
 
@@ -73,6 +75,7 @@ pub const Lv2Host = struct {
         while (it.next()) |entry| {
             if (entry.value_ptr.* == urid) {
                 const key_slice = entry.key_ptr.*;
+                // This is safe because we have inserted a null terminiated in mapUriImpl.
                 return @ptrCast(key_slice.ptr);
             }
         }
@@ -85,7 +88,7 @@ pub const Lv2Host = struct {
             const key_slice = entry.key_ptr.*;
             const len_with_terminator = key_slice.len + 1;
             const key_mut: [*]u8 = @constCast(key_slice.ptr);
-            std.heap.page_allocator.free(key_mut[0..len_with_terminator]);
+            self.allocator.free(key_mut[0..len_with_terminator]);
         }
         self.uri_table.deinit();
     }
