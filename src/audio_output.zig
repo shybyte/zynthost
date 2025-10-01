@@ -10,6 +10,7 @@ pub const PaStreamCallbackFlags = pa.PaStreamCallbackFlags;
 pub const paContinue = pa.paContinue;
 
 const sample_rate = 48000;
+const output_channels = 2; // stereo
 
 var stream: ?*pa.PaStream = null;
 
@@ -47,7 +48,7 @@ pub fn startAudio(user_data: ?*anyopaque, audioCallback: AudioCallback) !void {
 
                 var out_params = pa.PaStreamParameters{
                     .device = jack_default_dev,
-                    .channelCount = 1, // mono
+                    .channelCount = output_channels,
                     .sampleFormat = pa.paFloat32,
                     .suggestedLatency = (dev_info.*).defaultLowOutputLatency,
                     .hostApiSpecificStreamInfo = null,
@@ -87,7 +88,7 @@ pub fn startAudio(user_data: ?*anyopaque, audioCallback: AudioCallback) !void {
         const openErr = pa.Pa_OpenDefaultStream(
             &stream,
             0, // no input
-            1, // mono output
+            output_channels, // stereo output
             pa.paFloat32,
             sample_rate,
             pa.paFramesPerBufferUnspecified,

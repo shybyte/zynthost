@@ -182,6 +182,14 @@ pub const SynthPlugin = struct {
             }
         }
 
+        if (self.audio_ports.items.len != 2) {
+            std.debug.print(
+                "Expected exactly 2 audio output ports, found {d}\n",
+                .{self.audio_ports.items.len},
+            );
+            return error.UnsupportedAudioPortCount;
+        }
+
         if (midi_in_port_index == null) {
             return error.NoMidiInputFound;
         }

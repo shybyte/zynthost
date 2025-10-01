@@ -141,6 +141,7 @@ fn audioCallback(
 
     const data: *AudioCallbackUserData = @ptrCast(@alignCast(user_data.?));
     const out: [*]f32 = @ptrCast(@alignCast(output));
+    const frame_count_usize: usize = @intCast(frame_count);
 
     if (frame_count > synth_plugin_mod.max_frames) {
         std.debug.print("audioCallback got framecount {}\n", .{frame_count});
@@ -159,7 +160,12 @@ fn audioCallback(
         channel.plugin.run(@intCast(frame_count));
     }
 
-    mixFrames(out[0..@intCast(frame_count)], data.channels, data.patch_config.volume);
+    mixFrames(
+        out[0..(frame_count_usize * 2)],
+        frame_count_usize,
+        data.channels,
+        data.patch_config.volume,
+    );
 
     return audio_output.paContinue;
 }
@@ -181,35 +187,25 @@ fn routeMidiEvents(channel: *Channel, midi_events: []const MidiMessage) void {
     }
 }
 
-fn mixFrames(out: []f32, channels: []const Channel, patch_volume: f32) void {
-    if (channels.len == 0) {
-        @memset(out, 0);
-        return;
-    }
+fn mixFrames(out: []f32, frame_count: usize, channels: []const Channel, patch_volume: f32) void {
+    std.debug.assert(out.len == frame_count * 2);
+    @memset(out, 0);
 
-    const channel_scale = patch_volume / @as(f32, @floatFromInt(channels.len));
+    for (channels) |channel| {
+        const plugin = channel.plugin;
+        std.debug.assert(plugin.audio_ports.items.len == 2);
 
-    for (out, 0..) |*sample, frame_index| {
-        var frame_mix: f32 = 0.0;
-        for (channels) |*channel| {
-            frame_mix += mixChannelFrame(channel, frame_index);
+        const left_buffer = plugin.audio_out_bufs[plugin.audio_ports.items[0]] orelse unreachable;
+        const right_buffer = plugin.audio_out_bufs[plugin.audio_ports.items[1]] orelse unreachable;
+
+        const gain = channel.config.volume * patch_volume;
+
+        for (0..frame_count) |frame_index| {
+            const sample_index = frame_index * 2;
+            out[sample_index] += left_buffer[frame_index] * gain;
+            out[sample_index + 1] += right_buffer[frame_index] * gain;
         }
-        sample.* = frame_mix * channel_scale;
     }
-}
-
-fn mixChannelFrame(channel: *const Channel, frame_index: usize) f32 {
-    const synth_plugin = channel.plugin;
-    const port_count = synth_plugin.audio_ports.items.len;
-    std.debug.assert(port_count > 0);
-
-    var sample_sum: f32 = 0.0;
-    for (synth_plugin.audio_ports.items) |audio_port_index| {
-        sample_sum += synth_plugin.audio_out_bufs[audio_port_index].?[frame_index];
-    }
-
-    const port_average = sample_sum / @as(f32, @floatFromInt(port_count));
-    return port_average * channel.config.volume;
 }
 
 fn pollProgramChange(

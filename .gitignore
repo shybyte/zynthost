@@ -2,6 +2,7 @@
 
 # Created by Codex somtimes
 zig-cache
+.zig-global-cache
 
 zig-out/
 
