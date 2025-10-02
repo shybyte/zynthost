@@ -132,7 +132,7 @@ pub const UiSession = struct {
         self.ext.hide.?(self.ext);
         c.suil_host_free(self.host);
         c.suil_instance_free(self.suil_instance);
-        std.debug.print("UI {s}] Closed\n", .{self.ctx.plugin_uri_string});
+        std.debug.print("UI {s} Closed\n", .{self.ctx.plugin_uri_string});
     }
 
     fn listUIs(ctx: SessionContext) !void {
