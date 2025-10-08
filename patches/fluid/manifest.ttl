@@ -9,4 +9,4 @@
 <state.ttl>
 	lv2:appliesTo <http://calf.sourceforge.net/plugins/Fluidsynth> ;
 	a pset:Preset ;
-	rdfs:seeAlso <state.ttl> .
+	rdfs:seeAlso <fluid-channel-0.ttl> .

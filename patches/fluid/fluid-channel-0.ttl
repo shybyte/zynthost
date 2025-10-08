@@ -23,8 +23,14 @@
 		pset:value 1.0
 	] ;
 	state:state [
-		<urn:calf:soundfont> "/usr/share/sounds/sf2/default-GM.sf2" ;
-		<urn:calf:preset_key_set> "0" ;
+		<urn:calf:preset_key_set> "16403" ;
+		<urn:calf:preset_key_set10> "16384" ;
+		<urn:calf:preset_key_set11> "0" ;
+		<urn:calf:preset_key_set12> "0" ;
+		<urn:calf:preset_key_set13> "0" ;
+		<urn:calf:preset_key_set14> "0" ;
+		<urn:calf:preset_key_set15> "0" ;
+		<urn:calf:preset_key_set16> "0" ;
 		<urn:calf:preset_key_set2> "0" ;
 		<urn:calf:preset_key_set3> "0" ;
 		<urn:calf:preset_key_set4> "0" ;
@@ -33,11 +39,5 @@
 		<urn:calf:preset_key_set7> "0" ;
 		<urn:calf:preset_key_set8> "0" ;
 		<urn:calf:preset_key_set9> "0" ;
-		<urn:calf:preset_key_set10> "16384" ;
-		<urn:calf:preset_key_set11> "0" ;
-		<urn:calf:preset_key_set12> "0" ;
-		<urn:calf:preset_key_set13> "0" ;
-		<urn:calf:preset_key_set14> "0" ;
-		<urn:calf:preset_key_set15> "0" ;
-		<urn:calf:preset_key_set16> "0"
+		<urn:calf:soundfont> "/usr/share/sounds/sf2/default-GM.sf2"
 	] .
