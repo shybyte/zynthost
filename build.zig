@@ -123,6 +123,7 @@ pub fn build(b: *std.Build) void {
         test_exe.linkSystemLibrary("portaudio");
         test_exe.linkSystemLibrary("portmidi");
         test_exe.linkSystemLibrary("suil-0");
+        test_exe.root_module.linkSystemLibrary("gtk+-3.0", .{ .use_pkg_config = .force });
 
         const cfg = b.addOptions();
         cfg.addOption(?[]const u8, "only", only);
