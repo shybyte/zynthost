@@ -15,6 +15,15 @@ This Agents.md file provides comprehensive guidance for OpenAI Codex and other A
 - Use Zig 0.15.1
 - Prefer for loops (for(0..n) |i| {} ) oder while loops (while (i < n) : {i += 1} {} )
 
+## Compile / Type-Checking Requirements for OpenAI Codex
+
+OpenAI Codex should find compile errors with the following commands:
+
+```bash
+# Compile with OpenAI Codex
+zig build
+```
+
 ## Testing Requirements for OpenAI Codex
 
 OpenAI Codex should run tests with the following commands:

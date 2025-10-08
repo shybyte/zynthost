@@ -9,6 +9,7 @@ const audio_output = @import("./audio_output.zig");
 const patch_mod = @import("./patch.zig");
 const AppConfig = @import("./config.zig").AppConfig;
 const utils = @import("./utils.zig");
+const UiSession = @import("lv2/ui_session.zig").UiSession;
 
 const Channel = struct {
     midi_channel: u7,
@@ -97,13 +98,16 @@ pub fn main() !void {
         var reader = stdin_file.reader(&read_buffer);
 
         while (true) {
+            UiSession.pumpGtkEvents();
             if (pollProgramChange(&midi_program, &patch_set.value)) break;
 
             if (!try utils.fileHasInput(stdin_file)) {
+                UiSession.pumpGtkEvents();
                 std.Thread.sleep(100 * std.time.ns_per_ms);
                 continue;
             }
 
+            UiSession.pumpGtkEvents();
             const line = try reader.interface.takeDelimiterExclusive('\n');
             const command = std.mem.trimRight(u8, line, "\r\n");
             std.debug.print("You entered: \"{s}\"\n", .{command});

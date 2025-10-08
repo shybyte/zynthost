@@ -8,6 +8,8 @@ pub const c = @cImport({
     @cInclude("lv2/urid/urid.h");
     @cInclude("lv2/ui/ui.h");
     @cInclude("suil-0/suil/suil.h");
+    @cInclude("gtk/gtk.h");
+    @cInclude("stdlib.h");
     @cInclude("dlfcn.h");
 });
 

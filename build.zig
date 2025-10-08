@@ -57,6 +57,7 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("portaudio");
     exe.linkSystemLibrary("suil-0");
     exe.linkSystemLibrary("portmidi");
+    exe.root_module.linkSystemLibrary("gtk+-3.0", .{ .use_pkg_config = .force });
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
