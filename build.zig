@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const GTK = "gtk+-2.0";
+
 // Although this function looks imperative, it does not perform the build
 // directly and instead it mutates the build graph (`b`) that will be then
 // executed by an external runner. The functions in `std.Build` implement a DSL
@@ -57,7 +59,7 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("portaudio");
     exe.linkSystemLibrary("suil-0");
     exe.linkSystemLibrary("portmidi");
-    exe.root_module.linkSystemLibrary("gtk+-3.0", .{ .use_pkg_config = .force });
+    exe.root_module.linkSystemLibrary(GTK, .{ .use_pkg_config = .force });
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
@@ -123,7 +125,7 @@ pub fn build(b: *std.Build) void {
         test_exe.linkSystemLibrary("portaudio");
         test_exe.linkSystemLibrary("portmidi");
         test_exe.linkSystemLibrary("suil-0");
-        test_exe.root_module.linkSystemLibrary("gtk+-3.0", .{ .use_pkg_config = .force });
+        test_exe.root_module.linkSystemLibrary(GTK, .{ .use_pkg_config = .force });
 
         const cfg = b.addOptions();
         cfg.addOption(?[]const u8, "only", only);

@@ -5,7 +5,7 @@
             "volume": 0.99,
             "plugins": [
                 {
-                    "uri": "http://tytel.org/helm"
+                    "uri": "http://calf.sourceforge.net/plugins/Fluidsynth"
                 }
             ]
         }

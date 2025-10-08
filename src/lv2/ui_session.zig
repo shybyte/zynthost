@@ -47,7 +47,7 @@ var gtk_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false)
 
 pub const UiSession = struct {
     const Self = @This();
-    const UiKind = enum { external, x11 };
+    const UiKind = enum { external, gtk, x11 };
     const ContainerKind = enum { external, gtk2, gtk3 };
 
     const ContainerChoice = struct {
@@ -149,34 +149,65 @@ pub const UiSession = struct {
         defer c.lilv_node_free(ext_ui_class);
         const x11_ui_class = c.lilv_new_uri(world, X11_UI_URI);
         defer c.lilv_node_free(x11_ui_class);
+        const gtk2_ui_class = c.lilv_new_uri(world, c.LV2_UI__GtkUI);
+        defer c.lilv_node_free(gtk2_ui_class);
+        const gtk3_ui_class = c.lilv_new_uri(world, c.LV2_UI__Gtk3UI);
+        defer c.lilv_node_free(gtk3_ui_class);
 
         try Self.listUIs(ctx);
 
         const uis = c.lilv_plugin_get_uis(plugin);
         var it = c.lilv_uis_begin(uis);
-        var ui: ?*const c.LilvUI = null;
-        var ui_kind: ?UiKind = null;
+        var selected_ui: ?*const c.LilvUI = null;
+        var selected_kind: ?UiKind = null;
+        var selected_type_uri: ?[*:0]const u8 = null;
+        var gtk_ui: ?*const c.LilvUI = null;
+        var gtk_ui_type_uri: ?[*:0]const u8 = null;
+        var x11_ui: ?*const c.LilvUI = null;
         while (!c.lilv_uis_is_end(uis, it)) : (it = c.lilv_uis_next(uis, it)) {
             const u = c.lilv_uis_get(uis, it);
             if (c.lilv_ui_is_a(u, ext_ui_class)) {
-                ui = u;
-                ui_kind = .external;
+                selected_ui = u;
+                selected_kind = .external;
+                selected_type_uri = EXT_UI_WIDGET_URI;
                 break;
             }
+            if (c.lilv_ui_is_a(u, gtk3_ui_class)) {
+                gtk_ui = u;
+                gtk_ui_type_uri = c.LV2_UI__Gtk3UI;
+                continue;
+            }
+            if (c.lilv_ui_is_a(u, gtk2_ui_class)) {
+                if (gtk_ui == null) {
+                    gtk_ui = u;
+                    gtk_ui_type_uri = c.LV2_UI__GtkUI;
+                }
+                continue;
+            }
             if (c.lilv_ui_is_a(u, x11_ui_class)) {
-                ui = u;
-                ui_kind = .x11;
+                if (x11_ui == null) {
+                    x11_ui = u;
+                }
             }
         }
-        if (ui == null or ui_kind == null) return error.NoSupportedUiFound;
-        self.ui_kind = ui_kind.?;
+        if (selected_ui == null) {
+            if (gtk_ui) |ui_ptr| {
+                selected_ui = ui_ptr;
+                selected_kind = .gtk;
+                selected_type_uri = gtk_ui_type_uri;
+            } else if (x11_ui) |ui_ptr| {
+                selected_ui = ui_ptr;
+                selected_kind = .x11;
+                selected_type_uri = X11_UI_URI;
+            }
+        }
+        if (selected_ui == null or selected_kind == null or selected_type_uri == null) return error.NoSupportedUiFound;
+        const ui = selected_ui.?;
+        self.ui_kind = selected_kind.?;
 
         const plugin_uri_c = c.lilv_node_as_uri(ctx.plugin_uri);
-        const ui_uri_c = c.lilv_node_as_uri(c.lilv_ui_get_uri(ui.?));
-        const ui_type_uri_c = switch (self.ui_kind) {
-            .external => EXT_UI_WIDGET_URI,
-            .x11 => X11_UI_URI,
-        };
+        const ui_uri_c = c.lilv_node_as_uri(c.lilv_ui_get_uri(ui));
+        const ui_type_uri_c = selected_type_uri.?;
         const container_choice = selectContainerType(ui_type_uri_c) orelse {
             std.log.err(
                 "No Suil support for UI type {s}",
@@ -197,12 +228,12 @@ pub const UiSession = struct {
             },
         );
 
-        const binary_uri_c = c.lilv_node_as_uri(c.lilv_ui_get_binary_uri(ui.?)) orelse return error.SomeError;
+        const binary_uri_c = c.lilv_node_as_uri(c.lilv_ui_get_binary_uri(ui)) orelse return error.SomeError;
         const binary_path_c = try utils.convertUriToPath(ctx.allocator, binary_uri_c);
         defer ctx.allocator.free(binary_path_c);
         std.debug.print("binary_path_c {s}\n", .{binary_path_c});
 
-        const bundle_uri_c = c.lilv_node_as_uri(c.lilv_ui_get_bundle_uri(ui.?)) orelse return error.SomeError;
+        const bundle_uri_c = c.lilv_node_as_uri(c.lilv_ui_get_bundle_uri(ui)) orelse return error.SomeError;
         const bundle_path_c = try utils.convertUriToPath(ctx.allocator, bundle_uri_c);
         defer ctx.allocator.free(bundle_path_c);
         std.debug.print("bundle_path_c {s}\n", .{bundle_path_c});
@@ -391,6 +422,7 @@ pub const UiSession = struct {
     fn uiKindName(self: *Self) []const u8 {
         return switch (self.ui_kind) {
             .external => "external",
+            .gtk => "gtk",
             .x11 => "x11",
         };
     }

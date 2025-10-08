@@ -21,6 +21,25 @@
             }
         },
         {
+            "label": "Run main fluid",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "run",
+                "--",
+                "patches/fluid/patch-set.json"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            }
+        },
+        {
             "label": "Run main with 2 synths",
             "type": "shell",
             "command": "zig",
