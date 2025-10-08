@@ -23,7 +23,8 @@ pub const Lv2Host = struct {
     urid_map: c.LV2_URID_Map,
     urid_unmap: c.LV2_URID_Unmap,
     urid_map_feature: c.LV2_Feature,
-    urid_map_features: [2]?*const c.LV2_Feature,
+    urid_unmap_feature: c.LV2_Feature,
+    urid_map_features: [3]?*const c.LV2_Feature,
 
     pub fn mapUri(self: *Lv2Host, uri: [:0]const u8) c.LV2_URID {
         return self.mapUriImpl(uri.ptr);
@@ -111,6 +112,7 @@ pub fn initGlobal(allocator: std.mem.Allocator) !*Lv2Host {
         .urid_map = undefined,
         .urid_unmap = undefined,
         .urid_map_feature = undefined,
+        .urid_unmap_feature = undefined,
         .urid_map_features = undefined,
     };
 
@@ -124,7 +126,8 @@ pub fn initGlobal(allocator: std.mem.Allocator) !*Lv2Host {
     host.urid_map = .{ .handle = host, .map = urid_map_func };
     host.urid_unmap = .{ .handle = host, .unmap = urid_unmap_func };
     host.urid_map_feature = .{ .URI = "http://lv2plug.in/ns/ext/urid#map", .data = &host.urid_map };
-    host.urid_map_features = .{ &host.urid_map_feature, null };
+    host.urid_unmap_feature = .{ .URI = "http://lv2plug.in/ns/ext/urid#unmap", .data = &host.urid_unmap };
+    host.urid_map_features = .{ &host.urid_map_feature, &host.urid_unmap_feature, null };
 
     host_instance = host;
     return host;

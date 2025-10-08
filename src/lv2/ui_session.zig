@@ -76,7 +76,7 @@ pub const UiSession = struct {
     ext_host: LV2_External_UI_Host = undefined,
     ext_host_feat: c.LV2_Feature = undefined,
     instance_access_feat: c.LV2_Feature = undefined,
-    features: [4]?*const c.LV2_Feature = undefined,
+    features: [8]?*const c.LV2_Feature = undefined,
     gtk_window: ?*c.GtkWidget = null,
     gtk_widget: ?*c.GtkWidget = null,
 
@@ -223,14 +223,25 @@ pub const UiSession = struct {
             .data = lv2_handle,
         };
 
+        const lv2_host = host.get();
+
         var feature_count: usize = 0;
-        self.features = .{ null, null, null, null };
+        self.features = .{ null, null, null, null, null, null, null, null };
         if (self.ui_kind == .external) {
             self.features[feature_count] = &self.ext_host_feat;
             feature_count += 1;
         }
         self.features[feature_count] = &self.instance_access_feat;
         feature_count += 1;
+        var host_features_ptr = lv2_host.featurePtr();
+        while (true) {
+            const feature_ptr = host_features_ptr[0];
+            if (feature_ptr == null) break;
+            std.debug.assert(feature_count < self.features.len - 1);
+            self.features[feature_count] = feature_ptr;
+            feature_count += 1;
+            host_features_ptr += 1;
+        }
         self.features[feature_count] = null;
 
         const suil_instance = c.suil_instance_new(
