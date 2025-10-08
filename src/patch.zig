@@ -4,6 +4,7 @@ const utils = @import("./utils.zig");
 pub const PatchSet = struct {
     patches: []PatchSetEntry,
     dir: ?[]const u8 = null,
+    show_ui: ?bool = null,
 
     pub fn load(allocator: std.mem.Allocator, path: []const u8) !std.json.Parsed(@This()) {
         var parsed_patch_set = try utils.loadJSON(@This(), allocator, path);
@@ -147,6 +148,7 @@ test "PatchSet.loadPatch" {
     const patch_set = parsed_patch_set.value;
     defer parsed_patch_set.deinit();
 
+    try std.testing.expect(patch_set.show_ui == null);
     // Test loading a valid patch
     const patch = try patch_set.loadPatch(allocator, 0);
     defer patch.deinit();

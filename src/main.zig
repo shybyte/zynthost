@@ -39,6 +39,7 @@ pub fn main() !void {
     const patch_set = try patch_mod.PatchSet.load(allocator, patch_set_path);
     defer patch_set.deinit();
     std.debug.print(" successfully.", .{});
+    const show_ui = patch_set.value.show_ui orelse true;
 
     const app_config = try AppConfig.loadWithFallback(allocator);
     defer app_config.deinit();
@@ -89,8 +90,10 @@ pub fn main() !void {
         try audio_output.startAudio(&audio_callback_user_data, audioCallback);
         defer audio_output.stopAudio();
 
-        for (channels.items) |channel| {
-            try channel.plugin.showUI();
+        if (show_ui) {
+            for (channels.items) |channel| {
+                try channel.plugin.showUI();
+            }
         }
 
         var stdin_file = std.fs.File.stdin();
