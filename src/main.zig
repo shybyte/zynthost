@@ -12,7 +12,7 @@ const utils = @import("./utils.zig");
 const UiSession = @import("lv2/ui_session.zig").UiSession;
 
 const Channel = struct {
-    midi_channel: u7,
+    midi_channel: u4,
     config: *const patch_mod.ChannelConfig,
     plugin: *SynthPlugin,
 };
@@ -178,11 +178,15 @@ fn audioCallback(
 }
 
 fn routeMidiEvents(channel: *Channel, midi_events: []const MidiMessage) void {
+    const default_midi_channel = [_]u4{channel.midi_channel};
+    const allowed_channels = channel.config.midi_channels orelse default_midi_channel[0..];
+
     for (midi_events) |midi_event| {
         if (midi_event.program() != null) continue;
 
         const event_channel = midi_event.channel() orelse continue;
-        if (event_channel != channel.midi_channel) continue;
+
+        if (std.mem.indexOfScalar(u4, allowed_channels, event_channel) == null) continue;
 
         std.debug.print("MidiMessage: {f}\n", .{midi_event});
         channel.plugin.midi_sequence.addEvent(0, midi_event.data[0..]) catch |err| {
@@ -246,7 +250,7 @@ fn saveChannelStates(
         const plugin_patch_file_name = try patch_mod.get_plugin_patch_file_name(
             allocator,
             patch_path,
-            @intCast(channel.midi_channel),
+            channel.midi_channel,
         );
         defer allocator.free(plugin_patch_file_name);
         try channel.plugin.saveState(plugin_patch_file_name);

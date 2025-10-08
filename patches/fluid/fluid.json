@@ -3,6 +3,10 @@
     "channels": [
         {
             "volume": 0.99,
+            "midi_channels": [
+                0,
+                1
+            ],
             "plugins": [
                 {
                     "uri": "http://calf.sourceforge.net/plugins/Fluidsynth"

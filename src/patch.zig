@@ -78,6 +78,7 @@ pub const PatchConfig = struct {
 
 pub const ChannelConfig = struct {
     volume: f32 = 1.0,
+    midi_channels: ?[]const u4 = null,
     plugins: []PluginConfig,
 };
 
