@@ -50,33 +50,6 @@ pub const UiSession = struct {
     const UiKind = enum { external, gtk, x11 };
     const ContainerKind = enum { external, gtk2, gtk3 };
 
-    const UiClassNodes = struct {
-        ext: *c.LilvNode,
-        gtk2: *c.LilvNode,
-        gtk3: *c.LilvNode,
-        x11: *c.LilvNode,
-
-        fn init(world: *c.LilvWorld) !UiClassNodes {
-            return .{
-                .ext = try get(c.lilv_new_uri(world, EXT_UI_WIDGET_URI)),
-                .gtk2 = try get(c.lilv_new_uri(world, c.LV2_UI__GtkUI)),
-                .gtk3 = try get(c.lilv_new_uri(world, c.LV2_UI__Gtk3UI)),
-                .x11 = try get(c.lilv_new_uri(world, X11_UI_URI)),
-            };
-        }
-
-        fn deinit(self: UiClassNodes) void {
-            c.lilv_node_free(self.ext);
-            c.lilv_node_free(self.gtk2);
-            c.lilv_node_free(self.gtk3);
-            c.lilv_node_free(self.x11);
-        }
-
-        fn get(node: ?*c.LilvNode) !*c.LilvNode {
-            return node orelse return error.SomeError;
-        }
-    };
-
     pub const SessionContext = struct {
         allocator: std.mem.Allocator,
         world: *c.LilvWorld,
@@ -137,12 +110,10 @@ pub const UiSession = struct {
 
         const world = ctx.world;
         const plugin = ctx.plugin;
-        const ui_classes = try UiClassNodes.init(world);
-        defer ui_classes.deinit();
 
         try Self.listUIs(ctx);
 
-        const selection = try Self.chooseUi(plugin, ui_classes);
+        const selection = try Self.chooseUi(world, plugin);
         const ui = selection.ui;
         self.ui_kind = selection.kind;
 
@@ -265,7 +236,19 @@ pub const UiSession = struct {
         type_uri: [*:0]const u8,
     };
 
-    fn chooseUi(plugin: *const c.LilvPlugin, classes: UiClassNodes) !UiSelection {
+    fn chooseUi(world: *c.LilvWorld, plugin: *const c.LilvPlugin) !UiSelection {
+        const ext_ui = c.lilv_new_uri(world, EXT_UI_WIDGET_URI) orelse return error.SomeError;
+        defer c.lilv_node_free(ext_ui);
+
+        const gtk3_ui = c.lilv_new_uri(world, c.LV2_UI__Gtk3UI) orelse return error.SomeError;
+        defer c.lilv_node_free(gtk3_ui);
+
+        const gtk2_ui = c.lilv_new_uri(world, c.LV2_UI__GtkUI) orelse return error.SomeError;
+        defer c.lilv_node_free(gtk2_ui);
+
+        const x11_ui = c.lilv_new_uri(world, X11_UI_URI) orelse return error.SomeError;
+        defer c.lilv_node_free(x11_ui);
+
         const uis = c.lilv_plugin_get_uis(plugin);
         var gtk_candidate: ?UiSelection = null;
         var x11_candidate: ?UiSelection = null;
@@ -274,18 +257,18 @@ pub const UiSession = struct {
         while (!c.lilv_uis_is_end(uis, it)) : (it = c.lilv_uis_next(uis, it)) {
             const ui_ptr = c.lilv_uis_get(uis, it) orelse continue;
 
-            if (c.lilv_ui_is_a(ui_ptr, classes.ext)) {
+            if (c.lilv_ui_is_a(ui_ptr, ext_ui)) {
                 return .{ .ui = ui_ptr, .kind = .external, .type_uri = EXT_UI_WIDGET_URI };
             }
-            if (c.lilv_ui_is_a(ui_ptr, classes.gtk3)) {
+            if (c.lilv_ui_is_a(ui_ptr, gtk3_ui)) {
                 gtk_candidate = .{ .ui = ui_ptr, .kind = .gtk, .type_uri = c.LV2_UI__Gtk3UI };
                 continue;
             }
-            if (gtk_candidate == null and c.lilv_ui_is_a(ui_ptr, classes.gtk2)) {
+            if (gtk_candidate == null and c.lilv_ui_is_a(ui_ptr, gtk2_ui)) {
                 gtk_candidate = .{ .ui = ui_ptr, .kind = .gtk, .type_uri = c.LV2_UI__GtkUI };
                 continue;
             }
-            if (x11_candidate == null and c.lilv_ui_is_a(ui_ptr, classes.x11)) {
+            if (x11_candidate == null and c.lilv_ui_is_a(ui_ptr, x11_ui)) {
                 x11_candidate = .{ .ui = ui_ptr, .kind = .x11, .type_uri = X11_UI_URI };
             }
         }
