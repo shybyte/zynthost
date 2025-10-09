@@ -18,7 +18,6 @@ pub const LV2_External_UI_Host = extern struct {
 pub const EXT_UI_HOST_URI = "http://kxstudio.sf.net/ns/lv2ext/external-ui#Host";
 pub const EXT_UI_WIDGET_URI = "http://kxstudio.sf.net/ns/lv2ext/external-ui#Widget";
 pub const X11_UI_URI = "http://lv2plug.in/ns/extensions/ui#X11UI";
-const SUIL_MODULE_DIR_PATH = "/usr/lib/x86_64-linux-gnu/suil-0";
 
 const default_host_type_uris = [_][*:0]const u8{
     EXT_UI_WIDGET_URI,
@@ -42,7 +41,6 @@ const default_ui_type_uris = [_][*:0]const u8{
     c.LV2_UI__X11UI,
 };
 
-var suil_env_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var gtk_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 pub const UiSession = struct {
@@ -82,8 +80,6 @@ pub const UiSession = struct {
     };
 
     pub fn findSupportedUiCombinations(allocator: std.mem.Allocator) ![]SupportedUiCombination {
-        ensureSuilEnv();
-
         var list = std.ArrayList(SupportedUiCombination){};
         errdefer list.deinit(allocator);
 
@@ -105,100 +101,37 @@ pub const UiSession = struct {
 
     pub fn init(self: *Self, ctx: SessionContext) !void {
         self.ctx = ctx;
-
-        ensureSuilEnv();
-
-        const world = ctx.world;
-        const plugin = ctx.plugin;
+        self.ext = null;
+        self.gtk_window = null;
+        self.gtk_widget = null;
 
         try Self.listUIs(ctx);
 
-        const selection = try Self.chooseUi(world, plugin);
-        const ui = selection.ui;
-        self.ui_kind = selection.kind;
+        const ui_selection = try Self.chooseUi(ctx.world, ctx.plugin);
+        self.ui_kind = ui_selection.kind;
 
-        const plugin_uri_c = c.lilv_node_as_uri(ctx.plugin_uri);
-        const ui_uri_c = c.lilv_node_as_uri(c.lilv_ui_get_uri(ui));
-        const ui_type_uri_c = selection.type_uri;
-        const container_choice = selectContainerType(ui_type_uri_c) orelse {
-            std.log.err(
-                "No Suil support for UI type {s}",
-                .{std.mem.sliceTo(ui_type_uri_c, 0)},
-            );
-            return error.UiTypeNotSupported;
-        };
-        if (container_choice.kind == .gtk2 or container_choice.kind == .gtk3) {
-            try ensureGtkInitialized();
-        }
-        self.container_kind = container_choice.kind;
+        const resources = try Self.resolveUiResources(ctx, ui_selection.ui);
+        defer resources.deinit(ctx.allocator);
 
-        std.debug.print(
-            "Using Suil host {s} for UI type {s}\n",
-            .{
-                std.mem.sliceTo(container_choice.uri, 0),
-                std.mem.sliceTo(ui_type_uri_c, 0),
-            },
-        );
+        const container_choice = try self.determineContainer(ui_selection.type_uri);
 
-        const binary_uri_c = c.lilv_node_as_uri(c.lilv_ui_get_binary_uri(ui)) orelse return error.SomeError;
-        const binary_path_c = try utils.convertUriToPath(ctx.allocator, binary_uri_c);
-        defer ctx.allocator.free(binary_path_c);
-        std.debug.print("binary_path_c {s}\n", .{binary_path_c});
+        const host_ptr = try self.createSuilHost();
+        errdefer c.suil_host_free(host_ptr);
 
-        const bundle_uri_c = c.lilv_node_as_uri(c.lilv_ui_get_bundle_uri(ui)) orelse return error.SomeError;
-        const bundle_path_c = try utils.convertUriToPath(ctx.allocator, bundle_uri_c);
-        defer ctx.allocator.free(bundle_path_c);
-        std.debug.print("bundle_path_c {s}\n", .{bundle_path_c});
-
-        self.host = c.suil_host_new(Self.uiWrite, Self.uiIndex, Self.uiSubscribe, Self.uiUnsubscribe) orelse return error.SomeError;
-        errdefer c.suil_host_free(self.host);
-
-        self.ext_host = LV2_External_UI_Host{ .ui_closed = Self.onUiClosed };
-        self.ext_host_feat = c.LV2_Feature{
-            .URI = EXT_UI_HOST_URI,
-            .data = &self.ext_host,
-        };
-
-        const lv2_handle = c.lilv_instance_get_handle(ctx.instance) orelse return error.NoInstanceHandle;
-
-        self.instance_access_feat = c.LV2_Feature{
-            .URI = "http://lv2plug.in/ns/ext/instance-access",
-            .data = lv2_handle,
-        };
-
-        const lv2_host = host.get();
-
-        var feature_count: usize = 0;
-        self.features = .{ null, null, null, null, null, null, null, null };
-        if (self.ui_kind == .external) {
-            self.features[feature_count] = &self.ext_host_feat;
-            feature_count += 1;
-        }
-        self.features[feature_count] = &self.instance_access_feat;
-        feature_count += 1;
-        var host_features_ptr = lv2_host.featurePtr();
-        while (true) {
-            const feature_ptr = host_features_ptr[0];
-            if (feature_ptr == null) break;
-            std.debug.assert(feature_count < self.features.len - 1);
-            self.features[feature_count] = feature_ptr;
-            feature_count += 1;
-            host_features_ptr += 1;
-        }
-        self.features[feature_count] = null;
+        self.populateFeatureList(c.lilv_instance_get_handle(ctx.instance) orelse return error.NoInstanceHandle);
 
         const suil_instance = c.suil_instance_new(
-            self.host,
+            host_ptr,
             self,
             container_choice.uri,
-            plugin_uri_c,
-            ui_uri_c,
-            ui_type_uri_c,
-            bundle_path_c,
-            binary_path_c,
+            resources.plugin_uri_c,
+            resources.ui_uri_c,
+            ui_selection.type_uri,
+            resources.bundle_path,
+            resources.binary_path,
             @ptrCast(&self.features[0]),
         ) orelse {
-            std.log.err("suil_instance_new failed for UI {s} in {s}", .{ std.mem.span(ui_uri_c), binary_path_c });
+            std.log.err("suil_instance_new failed for UI {s} in {s}", .{ std.mem.span(resources.ui_uri_c), resources.binary_path });
             return error.SomeError;
         };
         errdefer c.suil_instance_free(suil_instance);
@@ -222,10 +155,10 @@ pub const UiSession = struct {
             },
             .gtk2, .gtk3 => {
                 const gtk_widget = Self.asGtk(widget_ptr) orelse {
-                    std.log.err("suil returned null Gtk widget for UI {s}", .{std.mem.span(ui_uri_c)});
+                    std.log.err("suil returned null Gtk widget for UI {s}", .{std.mem.span(resources.ui_uri_c)});
                     return error.UiWidgetUnavailable;
                 };
-                try self.setupGtkWindow(gtk_widget, plugin_uri_c);
+                try self.setupGtkWindow(gtk_widget, resources.plugin_uri_c);
             },
         }
     }
@@ -279,14 +212,116 @@ pub const UiSession = struct {
         return error.NoSupportedUiFound;
     }
 
+    const UiResources = struct {
+        plugin_uri_c: [*c]const u8,
+        ui_uri_c: [*c]const u8,
+        binary_path: [:0]u8,
+        bundle_path: [:0]u8,
+
+        fn deinit(self: UiResources, allocator: std.mem.Allocator) void {
+            allocator.free(self.binary_path);
+            allocator.free(self.bundle_path);
+        }
+    };
+
+    fn resolveUiResources(ctx: SessionContext, ui: *const c.LilvUI) !UiResources {
+        const plugin_uri_c = c.lilv_node_as_uri(ctx.plugin_uri) orelse return error.SomeError;
+        const ui_uri_node = c.lilv_ui_get_uri(ui);
+        const ui_uri_c = c.lilv_node_as_uri(ui_uri_node) orelse return error.SomeError;
+        const binary_uri_node = c.lilv_ui_get_binary_uri(ui);
+        const binary_uri_c = c.lilv_node_as_uri(binary_uri_node) orelse return error.SomeError;
+        const bundle_uri_node = c.lilv_ui_get_bundle_uri(ui);
+        const bundle_uri_c = c.lilv_node_as_uri(bundle_uri_node) orelse return error.SomeError;
+
+        const binary_path = try utils.convertUriToPath(ctx.allocator, binary_uri_c);
+        errdefer ctx.allocator.free(binary_path);
+        const bundle_path = try utils.convertUriToPath(ctx.allocator, bundle_uri_c);
+        errdefer ctx.allocator.free(bundle_path);
+
+        std.debug.print("binary_path_c {s}\n", .{binary_path});
+        std.debug.print("bundle_path_c {s}\n", .{bundle_path});
+
+        return UiResources{
+            .plugin_uri_c = plugin_uri_c,
+            .ui_uri_c = ui_uri_c,
+            .binary_path = binary_path,
+            .bundle_path = bundle_path,
+        };
+    }
+
+    fn determineContainer(self: *Self, ui_type_uri: [*:0]const u8) !ContainerChoice {
+        const container_choice = selectContainerType(ui_type_uri) orelse {
+            std.log.err("No Suil support for UI type {s}", .{std.mem.sliceTo(ui_type_uri, 0)});
+            return error.UiTypeNotSupported;
+        };
+
+        if (container_choice.kind == .gtk2 or container_choice.kind == .gtk3) {
+            try ensureGtkInitialized();
+        }
+
+        self.container_kind = container_choice.kind;
+
+        std.debug.print(
+            "Using Suil host {s} for UI type {s}\n",
+            .{
+                std.mem.sliceTo(container_choice.uri, 0),
+                std.mem.sliceTo(ui_type_uri, 0),
+            },
+        );
+
+        return container_choice;
+    }
+
+    fn createSuilHost(self: *Self) !*c.SuilHost {
+        const host_ptr = c.suil_host_new(Self.uiWrite, Self.uiIndex, Self.uiSubscribe, Self.uiUnsubscribe) orelse return error.SomeError;
+        self.host = host_ptr;
+        self.ext_host = LV2_External_UI_Host{ .ui_closed = Self.onUiClosed };
+        self.ext_host_feat = c.LV2_Feature{
+            .URI = EXT_UI_HOST_URI,
+            .data = &self.ext_host,
+        };
+
+        return host_ptr;
+    }
+
+    fn populateFeatureList(self: *Self, lv2_handle: *anyopaque) void {
+        self.instance_access_feat = c.LV2_Feature{
+            .URI = "http://lv2plug.in/ns/ext/instance-access",
+            .data = lv2_handle,
+        };
+
+        const lv2_host_features = host.get().featurePtr();
+
+        var feature_count: usize = 0;
+        self.features = .{ null, null, null, null, null, null, null, null };
+
+        if (self.ui_kind == .external) {
+            self.features[feature_count] = &self.ext_host_feat;
+            feature_count += 1;
+        }
+
+        self.features[feature_count] = &self.instance_access_feat;
+        feature_count += 1;
+
+        var cursor = lv2_host_features;
+        while (true) {
+            const feature_ptr = cursor[0];
+            if (feature_ptr == null) break;
+            std.debug.assert(feature_count < self.features.len - 1);
+            self.features[feature_count] = feature_ptr;
+            feature_count += 1;
+            cursor += 1;
+        }
+
+        self.features[feature_count] = null;
+    }
+
     const ContainerChoice = struct {
         uri: [*:0]const u8,
         kind: ContainerKind,
     };
 
     fn selectContainerType(ui_type_uri: [*:0]const u8) ?ContainerChoice {
-        ensureSuilEnv();
-
         const host_candidates = [_]ContainerChoice{
             .{ .uri = EXT_UI_WIDGET_URI, .kind = .external },
             .{ .uri = c.LV2_UI__Gtk3UI, .kind = .gtk3 },
@@ -422,28 +457,6 @@ pub const UiSession = struct {
         };
     }
 
-    fn ensureSuilEnv() void {
-        if (suil_env_initialized.load(.acquire)) return;
-
-        const already = suil_env_initialized.swap(true, .acq_rel);
-        if (already) return;
-
-        if (std.posix.getenv("SUIL_MODULE_DIR") != null) return;
-
-        const key = "SUIL_MODULE_DIR";
-        var key_buf: [(key.len) + 1]u8 = undefined;
-        std.mem.copyForwards(u8, key_buf[0..key.len], key);
-        key_buf[key.len] = 0;
-
-        var value_buf: [(SUIL_MODULE_DIR_PATH.len) + 1]u8 = undefined;
-        std.mem.copyForwards(u8, value_buf[0..SUIL_MODULE_DIR_PATH.len], SUIL_MODULE_DIR_PATH);
-        value_buf[SUIL_MODULE_DIR_PATH.len] = 0;
-
-        if (c.setenv(@ptrCast(key_buf[0..].ptr), @ptrCast(value_buf[0..].ptr), 0) != 0) {
-            std.log.warn("Failed to set default SUIL_MODULE_DIR", .{});
-        }
-    }
-
     fn ensureGtkInitialized() !void {
         if (gtk_initialized.load(.acquire)) return;
 
@@ -533,8 +546,6 @@ pub const UiSession = struct {
 };
 
 test "findSupportedUiCombinations enumerates supported host/ui pairs" {
-    UiSession.ensureSuilEnv();
-
     const combos = try UiSession.findSupportedUiCombinations(std.testing.allocator);
     defer std.testing.allocator.free(combos);
 
