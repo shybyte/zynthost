@@ -50,9 +50,31 @@ pub const UiSession = struct {
     const UiKind = enum { external, gtk, x11 };
     const ContainerKind = enum { external, gtk2, gtk3 };
 
-    const ContainerChoice = struct {
-        uri: [*:0]const u8,
-        kind: ContainerKind,
+    const UiClassNodes = struct {
+        ext: *c.LilvNode,
+        gtk2: *c.LilvNode,
+        gtk3: *c.LilvNode,
+        x11: *c.LilvNode,
+
+        fn init(world: *c.LilvWorld) !UiClassNodes {
+            return .{
+                .ext = try get(c.lilv_new_uri(world, EXT_UI_WIDGET_URI)),
+                .gtk2 = try get(c.lilv_new_uri(world, c.LV2_UI__GtkUI)),
+                .gtk3 = try get(c.lilv_new_uri(world, c.LV2_UI__Gtk3UI)),
+                .x11 = try get(c.lilv_new_uri(world, X11_UI_URI)),
+            };
+        }
+
+        fn deinit(self: UiClassNodes) void {
+            c.lilv_node_free(self.ext);
+            c.lilv_node_free(self.gtk2);
+            c.lilv_node_free(self.gtk3);
+            c.lilv_node_free(self.x11);
+        }
+
+        fn get(node: ?*c.LilvNode) !*c.LilvNode {
+            return node orelse return error.SomeError;
+        }
     };
 
     pub const SessionContext = struct {
@@ -108,35 +130,6 @@ pub const UiSession = struct {
         return list.toOwnedSlice(allocator);
     }
 
-    fn selectContainerType(ui_type_uri: [*:0]const u8) ?ContainerChoice {
-        ensureSuilEnv();
-
-        const host_candidates = [_]ContainerChoice{
-            .{ .uri = EXT_UI_WIDGET_URI, .kind = .external },
-            .{ .uri = c.LV2_UI__Gtk3UI, .kind = .gtk3 },
-            .{ .uri = c.LV2_UI__GtkUI, .kind = .gtk2 },
-        };
-
-        var best_choice: ?ContainerChoice = null;
-        var best_quality: c_uint = std.math.maxInt(c_uint);
-
-        for (host_candidates) |candidate| {
-            const quality = c.suil_ui_supported(candidate.uri, ui_type_uri);
-            if (quality == 0) continue;
-            if (best_choice == null or quality < best_quality) {
-                best_choice = candidate;
-                best_quality = quality;
-                continue;
-            }
-
-            if (quality == best_quality and best_choice.?.kind != .external and candidate.kind == .external) {
-                best_choice = candidate;
-            }
-        }
-
-        return best_choice;
-    }
-
     pub fn init(self: *Self, ctx: SessionContext) !void {
         self.ctx = ctx;
 
@@ -144,70 +137,18 @@ pub const UiSession = struct {
 
         const world = ctx.world;
         const plugin = ctx.plugin;
-
-        const ext_ui_class = c.lilv_new_uri(world, EXT_UI_WIDGET_URI);
-        defer c.lilv_node_free(ext_ui_class);
-        const x11_ui_class = c.lilv_new_uri(world, X11_UI_URI);
-        defer c.lilv_node_free(x11_ui_class);
-        const gtk2_ui_class = c.lilv_new_uri(world, c.LV2_UI__GtkUI);
-        defer c.lilv_node_free(gtk2_ui_class);
-        const gtk3_ui_class = c.lilv_new_uri(world, c.LV2_UI__Gtk3UI);
-        defer c.lilv_node_free(gtk3_ui_class);
+        const ui_classes = try UiClassNodes.init(world);
+        defer ui_classes.deinit();
 
         try Self.listUIs(ctx);
 
-        const uis = c.lilv_plugin_get_uis(plugin);
-        var it = c.lilv_uis_begin(uis);
-        var selected_ui: ?*const c.LilvUI = null;
-        var selected_kind: ?UiKind = null;
-        var selected_type_uri: ?[*:0]const u8 = null;
-        var gtk_ui: ?*const c.LilvUI = null;
-        var gtk_ui_type_uri: ?[*:0]const u8 = null;
-        var x11_ui: ?*const c.LilvUI = null;
-        while (!c.lilv_uis_is_end(uis, it)) : (it = c.lilv_uis_next(uis, it)) {
-            const u = c.lilv_uis_get(uis, it);
-            if (c.lilv_ui_is_a(u, ext_ui_class)) {
-                selected_ui = u;
-                selected_kind = .external;
-                selected_type_uri = EXT_UI_WIDGET_URI;
-                break;
-            }
-            if (c.lilv_ui_is_a(u, gtk3_ui_class)) {
-                gtk_ui = u;
-                gtk_ui_type_uri = c.LV2_UI__Gtk3UI;
-                continue;
-            }
-            if (c.lilv_ui_is_a(u, gtk2_ui_class)) {
-                if (gtk_ui == null) {
-                    gtk_ui = u;
-                    gtk_ui_type_uri = c.LV2_UI__GtkUI;
-                }
-                continue;
-            }
-            if (c.lilv_ui_is_a(u, x11_ui_class)) {
-                if (x11_ui == null) {
-                    x11_ui = u;
-                }
-            }
-        }
-        if (selected_ui == null) {
-            if (gtk_ui) |ui_ptr| {
-                selected_ui = ui_ptr;
-                selected_kind = .gtk;
-                selected_type_uri = gtk_ui_type_uri;
-            } else if (x11_ui) |ui_ptr| {
-                selected_ui = ui_ptr;
-                selected_kind = .x11;
-                selected_type_uri = X11_UI_URI;
-            }
-        }
-        if (selected_ui == null or selected_kind == null or selected_type_uri == null) return error.NoSupportedUiFound;
-        const ui = selected_ui.?;
-        self.ui_kind = selected_kind.?;
+        const selection = try Self.chooseUi(plugin, ui_classes);
+        const ui = selection.ui;
+        self.ui_kind = selection.kind;
 
         const plugin_uri_c = c.lilv_node_as_uri(ctx.plugin_uri);
         const ui_uri_c = c.lilv_node_as_uri(c.lilv_ui_get_uri(ui));
-        const ui_type_uri_c = selected_type_uri.?;
+        const ui_type_uri_c = selection.type_uri;
         const container_choice = selectContainerType(ui_type_uri_c) orelse {
             std.log.err(
                 "No Suil support for UI type {s}",
@@ -316,6 +257,77 @@ pub const UiSession = struct {
                 try self.setupGtkWindow(gtk_widget, plugin_uri_c);
             },
         }
+    }
+
+    const UiSelection = struct {
+        ui: *const c.LilvUI,
+        kind: UiKind,
+        type_uri: [*:0]const u8,
+    };
+
+    fn chooseUi(plugin: *const c.LilvPlugin, classes: UiClassNodes) !UiSelection {
+        const uis = c.lilv_plugin_get_uis(plugin);
+        var gtk_candidate: ?UiSelection = null;
+        var x11_candidate: ?UiSelection = null;
+
+        var it = c.lilv_uis_begin(uis);
+        while (!c.lilv_uis_is_end(uis, it)) : (it = c.lilv_uis_next(uis, it)) {
+            const ui_ptr = c.lilv_uis_get(uis, it) orelse continue;
+
+            if (c.lilv_ui_is_a(ui_ptr, classes.ext)) {
+                return .{ .ui = ui_ptr, .kind = .external, .type_uri = EXT_UI_WIDGET_URI };
+            }
+            if (c.lilv_ui_is_a(ui_ptr, classes.gtk3)) {
+                gtk_candidate = .{ .ui = ui_ptr, .kind = .gtk, .type_uri = c.LV2_UI__Gtk3UI };
+                continue;
+            }
+            if (gtk_candidate == null and c.lilv_ui_is_a(ui_ptr, classes.gtk2)) {
+                gtk_candidate = .{ .ui = ui_ptr, .kind = .gtk, .type_uri = c.LV2_UI__GtkUI };
+                continue;
+            }
+            if (x11_candidate == null and c.lilv_ui_is_a(ui_ptr, classes.x11)) {
+                x11_candidate = .{ .ui = ui_ptr, .kind = .x11, .type_uri = X11_UI_URI };
+            }
+        }
+
+        if (gtk_candidate) |candidate| return candidate;
+        if (x11_candidate) |candidate| return candidate;
+
+        return error.NoSupportedUiFound;
+    }
+
+    const ContainerChoice = struct {
+        uri: [*:0]const u8,
+        kind: ContainerKind,
+    };
+
+    fn selectContainerType(ui_type_uri: [*:0]const u8) ?ContainerChoice {
+        ensureSuilEnv();
+
+        const host_candidates = [_]ContainerChoice{
+            .{ .uri = EXT_UI_WIDGET_URI, .kind = .external },
+            .{ .uri = c.LV2_UI__Gtk3UI, .kind = .gtk3 },
+            .{ .uri = c.LV2_UI__GtkUI, .kind = .gtk2 },
+        };
+
+        var best_choice: ?ContainerChoice = null;
+        var best_quality: c_uint = std.math.maxInt(c_uint);
+
+        for (host_candidates) |candidate| {
+            const quality = c.suil_ui_supported(candidate.uri, ui_type_uri);
+            if (quality == 0) continue;
+            if (best_choice == null or quality < best_quality) {
+                best_choice = candidate;
+                best_quality = quality;
+                continue;
+            }
+
+            if (quality == best_quality and best_choice.?.kind != .external and candidate.kind == .external) {
+                best_choice = candidate;
+            }
+        }
+
+        return best_choice;
     }
 
     pub fn isClosed(self: *Self) bool {

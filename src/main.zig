@@ -20,7 +20,7 @@ const Channel = struct {
 // pseudo "message queue" to get program changes from audioCallback into main
 var new_midi_program = std.atomic.Value(u8).init(0);
 
-const inactivity_timeout_ms: i64 = std.time.ms_per_s * 10;
+const inactivity_timeout_ms: i64 = std.time.ms_per_s * 60;
 var last_midi_event_ms = std.atomic.Value(i64).init(0);
 
 pub fn main() !void {

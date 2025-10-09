@@ -14,6 +14,7 @@ This Agents.md file provides comprehensive guidance for OpenAI Codex and other A
 
 - Use Zig 0.15.1
 - Prefer for loops (for(0..n) |i| {} ) oder while loops (while (i < n) : {i += 1} {} )
+- When extracting functions, put them below (after) the caller.
 
 ## Compile / Type-Checking Requirements for OpenAI Codex
 
