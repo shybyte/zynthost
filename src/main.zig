@@ -19,9 +19,9 @@ const Channel = struct {
 
 // pseudo "message queue" to get program changes from audioCallback into main
 var new_midi_program = std.atomic.Value(u8).init(0);
-const inactivity_timeout_ns: i64 = @as(i64, std.time.ns_per_s * 10);
-var last_midi_event_ns = std.atomic.Value(i64).init(0);
-var audio_stream_running = std.atomic.Value(bool).init(false);
+
+const inactivity_timeout_ms: i64 = std.time.ms_per_s * 10;
+var last_midi_event_ms = std.atomic.Value(i64).init(0);
 
 pub fn main() !void {
     std.debug.print("Starting Zynthost...\n", .{});
@@ -90,15 +90,9 @@ pub fn main() !void {
             .channels = channels.items,
             .midi_input = &midi_input,
         };
-        const start_ns: i64 = @intCast(std.time.nanoTimestamp());
-        last_midi_event_ns.store(start_ns, .seq_cst);
+        last_midi_event_ms.store(std.time.milliTimestamp(), .seq_cst);
         try audio_output.startAudio(&audio_callback_user_data, audioCallback);
-        audio_stream_running.store(true, .seq_cst);
-        defer {
-            if (audio_stream_running.swap(false, .seq_cst)) {
-                audio_output.stopAudio();
-            }
-        }
+        defer audio_output.stopAudio();
 
         if (show_ui) {
             for (channels.items) |channel| {
@@ -113,18 +107,13 @@ pub fn main() !void {
         while (true) {
             UiSession.pumpGtkEvents();
 
-            const now_ns: i64 = @intCast(std.time.nanoTimestamp());
-            if (audio_stream_running.load(.seq_cst)) {
-                const last_ns = last_midi_event_ns.load(.seq_cst);
-                if (last_ns != 0 and now_ns >= last_ns and (now_ns - last_ns) >= inactivity_timeout_ns) {
-                    if (audio_stream_running.swap(false, .seq_cst)) {
-                        audio_output.stopAudio();
-                    }
+            if (audio_output.isRunning()) {
+                if ((std.time.milliTimestamp() - last_midi_event_ms.load(.seq_cst)) >= inactivity_timeout_ms) {
+                    audio_output.stopAudio();
                 }
             } else {
                 if (midi_input.has_new_events()) {
                     try audio_output.startAudio(&audio_callback_user_data, audioCallback);
-                    audio_stream_running.store(true, .seq_cst);
                     continue;
                 }
             }
@@ -132,12 +121,10 @@ pub fn main() !void {
             if (pollProgramChange(&midi_program, &patch_set.value)) break;
 
             if (!try utils.fileHasInput(stdin_file)) {
-                UiSession.pumpGtkEvents();
                 std.Thread.sleep(100 * std.time.ns_per_ms);
                 continue;
             }
 
-            UiSession.pumpGtkEvents();
             const line = try reader.interface.takeDelimiterExclusive('\n');
             const command = std.mem.trimRight(u8, line, "\r\n");
             std.debug.print("You entered: \"{s}\"\n", .{command});
@@ -189,10 +176,8 @@ fn audioCallback(
         }
     }
 
-    const now_ns: i64 = @intCast(std.time.nanoTimestamp());
-
     for (data.channels) |*channel| {
-        routeMidiEvents(channel, midi_events, now_ns);
+        routeMidiEvents(channel, midi_events);
         channel.plugin.run(@intCast(frame_count));
     }
 
@@ -206,7 +191,7 @@ fn audioCallback(
     return audio_output.paContinue;
 }
 
-fn routeMidiEvents(channel: *Channel, midi_events: []const MidiMessage, timestamp_ns: i64) void {
+fn routeMidiEvents(channel: *Channel, midi_events: []const MidiMessage) void {
     const default_midi_channel = [_]u4{channel.midi_channel};
     const allowed_channels = channel.config.midi_channels orelse default_midi_channel[0..];
 
@@ -226,7 +211,7 @@ fn routeMidiEvents(channel: *Channel, midi_events: []const MidiMessage, timestam
             continue;
         };
 
-        last_midi_event_ns.store(timestamp_ns, .seq_cst);
+        last_midi_event_ms.store(std.time.milliTimestamp(), .seq_cst);
     }
 }
 

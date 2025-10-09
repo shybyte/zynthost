@@ -14,6 +14,10 @@ const output_channels = 2; // stereo
 
 var stream: ?*pa.PaStream = null;
 
+pub fn isRunning() bool {
+    return stream != null;
+}
+
 pub fn startAudio(user_data: ?*anyopaque, audioCallback: AudioCallback) !void {
     const err = pa.Pa_Initialize();
     if (err != pa.paNoError) return errorFromPa(err);
@@ -119,6 +123,8 @@ pub fn stopAudio() void {
     stream = null;
 
     _ = pa.Pa_Terminate();
+
+    std.debug.print("Audio stopped\n", .{});
 }
 
 fn errorFromPa(code: pa.PaError) !void {
