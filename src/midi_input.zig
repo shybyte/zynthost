@@ -91,6 +91,21 @@ pub const MidiInput = struct {
         defer _ = c.Pm_Terminate();
     }
 
+    pub fn has_new_events(self: *Self) bool {
+        for (self.streams.items) |s| {
+            const poll_result = c.Pm_Poll(s.stream);
+            if (poll_result == 1) return true;
+            if (poll_result < 0) {
+                std.debug.print(
+                    "Pm_Poll error on {s}: {s}\n",
+                    .{ s.name, std.mem.span(c.Pm_GetErrorText(poll_result)) },
+                );
+            }
+        }
+
+        return false;
+    }
+
     pub fn poll(self: *Self) []const MidiMessage {
         self.midi_events.clearRetainingCapacity();
 
