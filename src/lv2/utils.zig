@@ -1,9 +1,7 @@
 const std = @import("std");
 const utils = @import("../utils.zig");
 
-const c = @cImport({
-    @cInclude("lilv-0/lilv/lilv.h");
-});
+const c = @import("c");
 
 pub fn convertUriToPath(allocator: std.mem.Allocator, uri: [*c]const u8) ![:0]u8 {
     const path_encoded = c.lilv_uri_to_path(uri) orelse {

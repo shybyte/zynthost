@@ -23,28 +23,22 @@ var new_midi_program = std.atomic.Value(u8).init(0);
 const inactivity_timeout_ms: i64 = std.time.ms_per_s * 60;
 var last_midi_event_ms = std.atomic.Value(i64).init(0);
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     std.debug.print("Starting Zynthost...\n", .{});
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer {
-        const leaked = gpa.deinit();
-        if (leaked == .leak) std.debug.print("Memory leaked!\n", .{});
-    }
-    const allocator = gpa.allocator();
-
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args); // free what argsAlloc allocated
+    const allocator = init.gpa;
+    const io = init.io;
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
 
     const patch_set_path = if (args.len == 2) args[1] else return error.MissingPatchSetFileName;
 
     std.debug.print("Load patch set {s} ...", .{patch_set_path});
-    const patch_set = try patch_mod.PatchSet.load(allocator, patch_set_path);
+    const patch_set = try patch_mod.PatchSet.load(allocator, io, patch_set_path);
     defer patch_set.deinit();
     std.debug.print(" successfully.", .{});
     const show_ui = patch_set.value.show_ui orelse true;
 
-    const app_config = try AppConfig.loadWithFallback(allocator);
+    const app_config = try AppConfig.loadWithFallback(allocator, io);
     defer app_config.deinit();
     var midi_input = try MidiInput.init(allocator, app_config.value.midi_name_filter);
     defer midi_input.deinit();
@@ -58,7 +52,7 @@ pub fn main() !void {
 
     var quit = false;
     while (!quit) {
-        const patch = try patch_set.value.loadPatch(allocator, midi_program);
+        const patch = try patch_set.value.loadPatch(allocator, io, midi_program);
         defer patch.deinit();
 
         var channels = try std.ArrayList(Channel).initCapacity(allocator, patch.channels().len);
@@ -69,7 +63,7 @@ pub fn main() !void {
 
             const plugin_patch_file_name = try patch_mod.get_plugin_patch_file_name(allocator, patch.path, @intCast(i));
             defer allocator.free(plugin_patch_file_name);
-            plugin.loadState(plugin_patch_file_name) catch |err| {
+            plugin.loadState(io, plugin_patch_file_name) catch |err| {
                 std.debug.print("Failed to load plugin patch {}\n", .{err});
             };
 
@@ -86,11 +80,12 @@ pub fn main() !void {
         }
 
         var audio_callback_user_data = AudioCallbackUserData{
+            .io = io,
             .patch_config = &patch.config.value,
             .channels = channels.items,
             .midi_input = &midi_input,
         };
-        last_midi_event_ms.store(std.time.milliTimestamp(), .seq_cst);
+        last_midi_event_ms.store(std.Io.Clock.awake.now(io).toMilliseconds(), .seq_cst);
         try audio_output.startAudio(&audio_callback_user_data, audioCallback);
         defer audio_output.stopAudio();
 
@@ -100,15 +95,15 @@ pub fn main() !void {
             }
         }
 
-        var stdin_file = std.fs.File.stdin();
+        const stdin_file = std.Io.File.stdin();
         var read_buffer: [1024]u8 = undefined;
-        var reader = stdin_file.reader(&read_buffer);
+        var reader = stdin_file.reader(io, &read_buffer);
 
         while (true) {
             UiSession.pumpGtkEvents();
 
             if (audio_output.isRunning()) {
-                if ((std.time.milliTimestamp() - last_midi_event_ms.load(.seq_cst)) >= inactivity_timeout_ms) {
+                if ((std.Io.Clock.awake.now(io).toMilliseconds() - last_midi_event_ms.load(.seq_cst)) >= inactivity_timeout_ms) {
                     audio_output.stopAudio();
                 }
             } else {
@@ -121,12 +116,12 @@ pub fn main() !void {
             if (pollProgramChange(&midi_program, &patch_set.value)) break;
 
             if (!try utils.fileHasInput(stdin_file)) {
-                std.Thread.sleep(100 * std.time.ns_per_ms);
+                try io.sleep(.fromMilliseconds(100), .awake);
                 continue;
             }
 
             const line = try reader.interface.takeDelimiterExclusive('\n');
-            const command = std.mem.trimRight(u8, line, "\r\n");
+            const command = std.mem.trimEnd(u8, line, "\r\n");
             std.debug.print("You entered: \"{s}\"\n", .{command});
 
             if (std.mem.eql(u8, command, "s")) {
@@ -143,6 +138,7 @@ pub fn main() !void {
 }
 
 const AudioCallbackUserData = struct {
+    io: std.Io,
     patch_config: *const patch_mod.PatchConfig,
     channels: []Channel,
     midi_input: *MidiInput,
@@ -177,7 +173,7 @@ fn audioCallback(
     }
 
     for (data.channels) |*channel| {
-        routeMidiEvents(channel, midi_events);
+        routeMidiEvents(data.io, channel, midi_events);
         channel.plugin.run(@intCast(frame_count));
     }
 
@@ -191,7 +187,7 @@ fn audioCallback(
     return audio_output.paContinue;
 }
 
-fn routeMidiEvents(channel: *Channel, midi_events: []const MidiMessage) void {
+fn routeMidiEvents(io: std.Io, channel: *Channel, midi_events: []const MidiMessage) void {
     const default_midi_channel = [_]u4{channel.midi_channel};
     const allowed_channels = channel.config.midi_channels orelse default_midi_channel[0..];
 
@@ -211,7 +207,7 @@ fn routeMidiEvents(channel: *Channel, midi_events: []const MidiMessage) void {
             continue;
         };
 
-        last_midi_event_ms.store(std.time.milliTimestamp(), .seq_cst);
+        last_midi_event_ms.store(std.Io.Clock.awake.now(io).toMilliseconds(), .seq_cst);
     }
 }
 

@@ -3,16 +3,17 @@ const std = @import("std");
 pub fn loadJSON(
     comptime T: type,
     allocator: std.mem.Allocator,
+    io: std.Io,
     path: []const u8,
 ) !std.json.Parsed(T) {
     const MAX_JSON_SIZE = 100 * 1024 * 1024; // 100 MB
-    const file_content = try std.fs.cwd().readFileAlloc(allocator, path, MAX_JSON_SIZE);
+    const file_content = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(MAX_JSON_SIZE));
     defer allocator.free(file_content);
     return std.json.parseFromSlice(T, allocator, file_content, .{});
 }
 
 /// NOTE: This POSIX-only implementation does not work on Windows handles.
-pub fn fileHasInput(file: std.fs.File) !bool {
+pub fn fileHasInput(file: std.Io.File) !bool {
     var fds = [_]std.posix.pollfd{
         .{ .fd = file.handle, .events = std.posix.POLL.IN, .revents = 0 },
     };

@@ -1,10 +1,6 @@
 const std = @import("std");
 
-const c = @cImport({
-    @cInclude("lv2/atom/atom.h");
-    @cInclude("lv2/midi/midi.h");
-    @cInclude("lv2/time/time.h");
-});
+const c = @import("c");
 
 pub const MidiSequence = struct {
     allocator: std.mem.Allocator,

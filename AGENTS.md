@@ -12,7 +12,7 @@ This Agents.md file provides comprehensive guidance for OpenAI Codex and other A
 
 ### General Conventions for Agents.md Implementation
 
-- Use Zig 0.15.1
+- Use Zig 0.17.0
 - Prefer for loops (for(0..n) |i| {} ) oder while loops (while (i < n) : {i += 1} {} )
 - When extracting functions, put them below (after) the caller.
 

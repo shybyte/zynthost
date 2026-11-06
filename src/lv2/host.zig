@@ -1,16 +1,6 @@
 const std = @import("std");
 
-pub const c = @cImport({
-    @cInclude("lilv-0/lilv/lilv.h");
-    @cInclude("lv2/core/lv2.h");
-    @cInclude("lv2/atom/atom.h");
-    @cInclude("lv2/midi/midi.h");
-    @cInclude("lv2/urid/urid.h");
-    @cInclude("lv2/ui/ui.h");
-    @cInclude("suil-0/suil/suil.h");
-    @cInclude("gtk/gtk.h");
-    @cInclude("dlfcn.h");
-});
+pub const c = @import("c");
 
 // This is not really threadsafe, but probably fine for now.
 const UriTable = std.StringHashMap(c_uint);
@@ -60,7 +50,7 @@ pub const Lv2Host = struct {
         if (self.uri_table.get(slice)) |found| return found;
 
         // This is not realtimesafe but probably it's unlikely to cause problems.
-        const dup = self.allocator.dupeZ(u8, slice) catch return 0;
+        const dup = self.allocator.dupeSentinel(u8, slice, 0) catch return 0;
         errdefer self.allocator.free(dup);
 
         const new_id: c.LV2_URID = @intCast(self.uri_table.count() + 1);

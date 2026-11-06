@@ -235,7 +235,7 @@ pub const SynthPlugin = struct {
 
     pub fn saveState(self: *Self, file_path: [:0]const u8) !void {
         const lv2_host = host.get();
-        const dir = try self.allocator.dupeZ(u8, std.fs.path.dirname(file_path) orelse "");
+        const dir = try self.allocator.dupeSentinel(u8, std.fs.path.dirname(file_path) orelse "", 0);
         defer self.allocator.free(dir);
 
         std.debug.print("saveState {s} {s}\n", .{ dir, file_path });
@@ -279,13 +279,13 @@ pub const SynthPlugin = struct {
         std.debug.print("Successfully saved LV2 state from instance.\n", .{});
     }
 
-    pub fn loadState(self: *Self, file_path: [:0]const u8) !void {
+    pub fn loadState(self: *Self, io: std.Io, file_path: [:0]const u8) !void {
         const lv2_host = host.get();
-        const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
+        const file = std.Io.Dir.cwd().openFile(io, file_path, .{}) catch |err| {
             std.debug.print("Can't open file '{s}'.\n", .{file_path});
             return err;
         };
-        defer file.close();
+        defer file.close(io);
 
         const state = c.lilv_state_new_from_file(
             self.world,
@@ -438,7 +438,7 @@ test "SynthPlugin" {
     defer synth_plugin.deinit();
 
     try synth_plugin.saveState("patches/tmp/patch.ttl");
-    try synth_plugin.loadState("patches/tmp/patch.ttl");
+    try synth_plugin.loadState(std.testing.io, "patches/tmp/patch.ttl");
 
     try std.testing.expectEqual(2, synth_plugin.audio_ports.items.len);
     try std.testing.expectEqual(5, synth_plugin.audio_ports.items[0]);
@@ -451,5 +451,5 @@ test "SynthPlugin" {
 
     const file_name = "patches/tmp/test-plugin-patch.json";
     try synth_plugin.saveState(file_name);
-    try synth_plugin.loadState(file_name);
+    try synth_plugin.loadState(std.testing.io, file_name);
 }

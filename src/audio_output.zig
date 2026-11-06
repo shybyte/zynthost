@@ -1,8 +1,6 @@
 const std = @import("std");
 
-const pa = @cImport({
-    @cInclude("portaudio.h");
-});
+const pa = @import("c");
 
 pub const AudioCallback = pa.PaStreamCallback;
 pub const PaStreamCallbackTimeInfo = pa.PaStreamCallbackTimeInfo;

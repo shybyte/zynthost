@@ -55,11 +55,18 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    exe.linkSystemLibrary("lilv-0");
-    exe.linkSystemLibrary("portaudio");
-    exe.linkSystemLibrary("suil-0");
-    exe.linkSystemLibrary("portmidi");
-    exe.root_module.linkSystemLibrary(GTK, .{ .use_pkg_config = .force });
+    const bindings = b.addTranslateC(.{
+        .root_source_file = b.path("src/c.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    bindings.linkSystemLibrary("lilv-0", .{});
+    bindings.linkSystemLibrary("portaudio", .{});
+    bindings.linkSystemLibrary("suil-0", .{});
+    bindings.linkSystemLibrary("portmidi", .{});
+    bindings.linkSystemLibrary(GTK, .{ .use_pkg_config = .force });
+    const c_module = bindings.createModule();
+    exe.root_module.addImport("c", c_module);
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
@@ -89,9 +96,7 @@ pub fn build(b: *std.Build) void {
 
     // This allows the user to pass arguments to the application in the build
     // command itself, like this: `zig build run -- arg1 arg2 etc`
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
+    run_cmd.addPassthruArgs();
 
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
@@ -121,11 +126,7 @@ pub fn build(b: *std.Build) void {
             .filters = test_filters,
         });
 
-        test_exe.linkSystemLibrary("lilv-0");
-        test_exe.linkSystemLibrary("portaudio");
-        test_exe.linkSystemLibrary("portmidi");
-        test_exe.linkSystemLibrary("suil-0");
-        test_exe.root_module.linkSystemLibrary(GTK, .{ .use_pkg_config = .force });
+        test_exe.root_module.addImport("c", c_module);
 
         const cfg = b.addOptions();
         cfg.addOption(?[]const u8, "only", only);

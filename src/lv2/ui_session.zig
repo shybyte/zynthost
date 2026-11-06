@@ -80,7 +80,7 @@ pub const UiSession = struct {
     };
 
     pub fn findSupportedUiCombinations(allocator: std.mem.Allocator) ![]SupportedUiCombination {
-        var list = std.ArrayList(SupportedUiCombination){};
+        var list: std.ArrayList(SupportedUiCombination) = .empty;
         errdefer list.deinit(allocator);
 
         for (default_host_type_uris) |host_uri| {

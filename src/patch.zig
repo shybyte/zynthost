@@ -6,8 +6,8 @@ pub const PatchSet = struct {
     dir: ?[]const u8 = null,
     show_ui: ?bool = null,
 
-    pub fn load(allocator: std.mem.Allocator, path: []const u8) !std.json.Parsed(@This()) {
-        var parsed_patch_set = try utils.loadJSON(@This(), allocator, path);
+    pub fn load(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !std.json.Parsed(@This()) {
+        var parsed_patch_set = try utils.loadJSON(@This(), allocator, io, path);
         if (parsed_patch_set.value.dir == null) {
             parsed_patch_set.value.dir = try parsed_patch_set.arena.allocator().dupe(u8, std.fs.path.dirname(path) orelse "");
         }
@@ -23,12 +23,12 @@ pub const PatchSet = struct {
         return false;
     }
 
-    pub fn loadPatch(self: @This(), allocator: std.mem.Allocator, program: u7) !Patch {
+    pub fn loadPatch(self: @This(), allocator: std.mem.Allocator, io: std.Io, program: u7) !Patch {
         for (self.patches) |patch| {
             if (patch.program == program) {
                 const complete_patch_path = try std.fs.path.join(allocator, &.{ self.dir.?, patch.file });
                 defer allocator.free(complete_patch_path);
-                const parsed_patch_config = try PatchConfig.load(allocator, complete_patch_path);
+                const parsed_patch_config = try PatchConfig.load(allocator, io, complete_patch_path);
                 return .{
                     .config = parsed_patch_config,
                     .path = try parsed_patch_config.arena.allocator().dupe(u8, complete_patch_path),
@@ -63,8 +63,8 @@ pub const PatchConfig = struct {
     volume: f32 = 1.0,
     channels: []ChannelConfig,
 
-    pub fn load(allocator: std.mem.Allocator, path: []const u8) !std.json.Parsed(@This()) {
-        const result = try utils.loadJSON(@This(), allocator, path);
+    pub fn load(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !std.json.Parsed(@This()) {
+        const result = try utils.loadJSON(@This(), allocator, io, path);
         errdefer result.deinit();
 
         if (result.value.channels.len > 16) {
@@ -115,8 +115,9 @@ test "get_plugin_patch_file_name" {
 
 test "load one-synth.json" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
-    const parsed_patch_config = try PatchConfig.load(allocator, "patches/demo/one-synth.json");
+    const parsed_patch_config = try PatchConfig.load(allocator, io, "patches/demo/one-synth.json");
     defer parsed_patch_config.deinit();
 
     const patch_config = parsed_patch_config.value;
@@ -128,8 +129,9 @@ test "load one-synth.json" {
 
 test "load two-synth.json" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
-    const parsed_patch_config = try PatchConfig.load(allocator, "patches/demo/two-synths.json");
+    const parsed_patch_config = try PatchConfig.load(allocator, io, "patches/demo/two-synths.json");
     defer parsed_patch_config.deinit();
 
     const patch_config = parsed_patch_config.value;
@@ -143,20 +145,21 @@ test "load two-synth.json" {
 
 test "PatchSet.loadPatch" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
     // Load the PatchSet from the "patches/demo" directory
-    var parsed_patch_set = try PatchSet.load(allocator, "patches/demo/patch-set.json");
+    var parsed_patch_set = try PatchSet.load(allocator, io, "patches/demo/patch-set.json");
     const patch_set = parsed_patch_set.value;
     defer parsed_patch_set.deinit();
 
     try std.testing.expect(patch_set.show_ui == null);
     // Test loading a valid patch
-    const patch = try patch_set.loadPatch(allocator, 0);
+    const patch = try patch_set.loadPatch(allocator, io, 0);
     defer patch.deinit();
 
     try std.testing.expectEqualDeep("http://tytel.org/helm", patch.channels()[0].plugins[0].uri);
 
     // Test loading a non-existent program
-    const result = patch_set.loadPatch(allocator, 3);
+    const result = patch_set.loadPatch(allocator, io, 3);
     try std.testing.expect(result == error.ProgramNotFound);
 }

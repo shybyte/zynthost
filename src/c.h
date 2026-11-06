@@ -1,0 +1,12 @@
+#include <portaudio.h>
+#include <portmidi.h>
+#include <lilv-0/lilv/lilv.h>
+#include <lv2/core/lv2.h>
+#include <lv2/atom/atom.h>
+#include <lv2/midi/midi.h>
+#include <lv2/urid/urid.h>
+#include <lv2/ui/ui.h>
+#include <suil-0/suil/suil.h>
+#include <gtk/gtk.h>
+#include <dlfcn.h>
+#include <lv2/time/time.h>

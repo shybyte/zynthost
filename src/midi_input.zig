@@ -2,9 +2,7 @@ const std = @import("std");
 const MidiMessage = @import("./midi.zig").MidiMessage;
 
 // PortMidi C API
-const c = @cImport({
-    @cInclude("portmidi.h");
-});
+const c = @import("c");
 
 const StreamRec = struct {
     name: []const u8,
