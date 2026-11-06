@@ -1,6 +1,7 @@
 const std = @import("std");
 const host = @import("host.zig");
 const utils = @import("utils.zig");
+const MessageQueue = @import("message_queue.zig").MessageQueue;
 
 const c = host.c;
 
@@ -46,7 +47,7 @@ var gtk_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false)
 pub const UiSession = struct {
     const Self = @This();
     const UiKind = enum { external, gtk, x11 };
-    const ContainerKind = enum { external, gtk2, gtk3 };
+    const ContainerKind = enum { external, gtk3 };
 
     pub const SessionContext = struct {
         allocator: std.mem.Allocator,
@@ -55,7 +56,10 @@ pub const UiSession = struct {
         plugin_uri: *c.LilvNode,
         plugin: *const c.LilvPlugin,
         instance: [*c]c.LilvInstance,
-        control_in_vals: []f32,
+        control_values: []std.atomic.Value(u32),
+        control_ports: []const bool,
+        requests: *MessageQueue,
+        event_transfer: u32,
     };
 
     closed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -72,6 +76,7 @@ pub const UiSession = struct {
     features: [8]?*const c.LV2_Feature = undefined,
     gtk_window: ?*c.GtkWidget = null,
     gtk_widget: ?*c.GtkWidget = null,
+    idle_interface: ?*const c.LV2UI_Idle_Interface = null,
 
     pub const SupportedUiCombination = struct {
         host_type_uri: []const u8,
@@ -137,6 +142,16 @@ pub const UiSession = struct {
         errdefer c.suil_instance_free(suil_instance);
 
         self.suil_instance = suil_instance;
+        if (c.suil_instance_extension_data(suil_instance, c.LV2_UI__idleInterface)) |ptr| {
+            self.idle_interface = @ptrCast(@alignCast(ptr));
+        }
+
+        // A UI must receive the current control values when it is opened.
+        for (ctx.control_values, 0..) |*snapshot, port| {
+            if (!ctx.control_ports[port]) continue;
+            const value: f32 = @bitCast(snapshot.load(.monotonic));
+            self.portEvent(@intCast(port), 0, std.mem.asBytes(&value));
+        }
 
         const widget_ptr = c.suil_instance_get_widget(suil_instance);
         self.closed.store(false, .seq_cst);
@@ -153,7 +168,7 @@ pub const UiSession = struct {
                     std.debug.print("External UI provided no show() implementation.\n", .{});
                 }
             },
-            .gtk2, .gtk3 => {
+            .gtk3 => {
                 const gtk_widget = Self.asGtk(widget_ptr) orelse {
                     std.log.err("suil returned null Gtk widget for UI {s}", .{std.mem.span(resources.ui_uri_c)});
                     return error.UiWidgetUnavailable;
@@ -255,7 +270,7 @@ pub const UiSession = struct {
             return error.UiTypeNotSupported;
         };
 
-        if (container_choice.kind == .gtk2 or container_choice.kind == .gtk3) {
+        if (container_choice.kind == .gtk3) {
             try ensureGtkInitialized();
         }
 
@@ -325,7 +340,6 @@ pub const UiSession = struct {
         const host_candidates = [_]ContainerChoice{
             .{ .uri = EXT_UI_WIDGET_URI, .kind = .external },
             .{ .uri = c.LV2_UI__Gtk3UI, .kind = .gtk3 },
-            .{ .uri = c.LV2_UI__GtkUI, .kind = .gtk2 },
         };
 
         var best_choice: ?ContainerChoice = null;
@@ -364,7 +378,7 @@ pub const UiSession = struct {
                     }
                 }
             },
-            .gtk2, .gtk3 => {
+            .gtk3 => {
                 if (self.gtk_window) |window| {
                     c.gtk_widget_destroy(window);
                     self.gtk_window = null;
@@ -372,8 +386,8 @@ pub const UiSession = struct {
                 }
             },
         }
-        c.suil_host_free(self.host);
         c.suil_instance_free(self.suil_instance);
+        c.suil_host_free(self.host);
         self.closed.store(true, .seq_cst);
         std.debug.print("UI {s} Closed\n", .{self.ctx.plugin_uri_string});
     }
@@ -478,6 +492,23 @@ pub const UiSession = struct {
         }
     }
 
+    pub fn pump(self: *Self) void {
+        if (self.closed.load(.acquire)) return;
+        if (self.ext) |ext| {
+            if (ext.run) |run| run(ext);
+        }
+        if (self.idle_interface) |interface| {
+            if (interface.idle) |idle| {
+                if (idle(c.suil_instance_get_handle(self.suil_instance)) != 0) self.closed.store(true, .release);
+            }
+        }
+    }
+
+    pub fn portEvent(self: *Self, port: u32, protocol: u32, data: []const u8) void {
+        if (self.closed.load(.acquire)) return;
+        c.suil_instance_port_event(self.suil_instance, port, @intCast(data.len), protocol, data.ptr);
+    }
+
     pub fn uiWrite(
         controller: ?*anyopaque,
         port_index: u32,
@@ -485,21 +516,22 @@ pub const UiSession = struct {
         protocol: u32,
         buffer: ?*const anyopaque,
     ) callconv(.c) void {
-        std.debug.print("uiWrite portIndex {} {} {} {?}\n", .{ port_index, protocol, buffer_size, buffer });
-
-        const sess: *Self = @ptrCast(@alignCast(controller));
-        const control_in_vals = sess.*.ctx.control_in_vals;
-        if (port_index < control_in_vals.len and protocol == 0 and buffer != null and buffer_size == @sizeOf(f32)) {
-            const fptr: *const f32 = @ptrCast(@alignCast(buffer.?));
-            control_in_vals[port_index] = fptr.*;
-            std.debug.print("New val: {}\n", .{fptr.*});
+        const sess: *Self = @ptrCast(@alignCast(controller orelse return));
+        const ptr: [*]const u8 = @ptrCast(buffer orelse return);
+        if (protocol != 0 and protocol != sess.ctx.event_transfer) return;
+        if (!sess.ctx.requests.push(port_index, protocol, ptr[0..buffer_size])) {
+            std.log.warn("LV2 UI message queue full or message too large; port {d}", .{port_index});
         }
     }
 
     pub fn uiIndex(controller: ?*anyopaque, port_symbol: [*c]const u8) callconv(.c) u32 {
-        _ = controller;
-        std.debug.print("uiIndex port_symbol {s}\n", .{port_symbol});
-        return 0;
+        const sess: *Self = @ptrCast(@alignCast(controller orelse return c.LV2UI_INVALID_PORT_INDEX));
+        if (port_symbol == null) return c.LV2UI_INVALID_PORT_INDEX;
+        const symbol = c.lilv_new_string(sess.ctx.world, port_symbol);
+        defer c.lilv_node_free(symbol);
+        const port = c.lilv_plugin_get_port_by_symbol(sess.ctx.plugin, symbol);
+        if (port == null) return c.LV2UI_INVALID_PORT_INDEX;
+        return c.lilv_port_get_index(sess.ctx.plugin, port);
     }
 
     pub fn uiSubscribe(

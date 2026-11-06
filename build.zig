@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const GTK = "gtk+-2.0";
+const GTK = "gtk+-3.0";
 
 // Although this function looks imperative, it does not perform the build
 // directly and instead it mutates the build graph (`b`) that will be then

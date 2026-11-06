@@ -10,3 +10,9 @@
 #include <gtk/gtk.h>
 #include <dlfcn.h>
 #include <lv2/time/time.h>
+#include <lv2/worker/worker.h>
+#include <lv2/atom/forge.h>
+#include <lv2/buf-size/buf-size.h>
+#include <lv2/options/options.h>
+#include <pthread.h>
+#include <semaphore.h>

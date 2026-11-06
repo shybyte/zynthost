@@ -12,6 +12,12 @@ test {
             _ = @import("lv2/synth_plugin.zig");
         } else if (std.mem.endsWith(u8, p, "lv2/ui_session.zig")) {
             _ = @import("lv2/ui_session.zig");
+        } else if (std.mem.endsWith(u8, p, "lv2/worker.zig")) {
+            _ = @import("lv2/worker.zig");
+        } else if (std.mem.endsWith(u8, p, "lv2/message_queue.zig")) {
+            _ = @import("lv2/message_queue.zig");
+        } else if (std.mem.endsWith(u8, p, "main.zig")) {
+            _ = @import("main.zig");
         } else if (std.mem.endsWith(u8, p, "patch.zig")) {
             _ = @import("patch.zig");
         } else {
@@ -25,6 +31,9 @@ test {
         _ = @import("lv2/midi_sequence.zig");
         _ = @import("lv2/ui_session.zig");
         _ = @import("lv2/synth_plugin.zig");
+        _ = @import("lv2/message_queue.zig");
+        _ = @import("lv2/worker.zig");
+        _ = @import("main.zig");
         _ = @import("patch.zig");
     };
 }

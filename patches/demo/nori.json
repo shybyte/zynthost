@@ -1,0 +1,13 @@
+{
+    "volume": 0.98,
+    "channels": [
+        {
+            "volume": 0.99,
+            "plugins": [
+                {
+                    "uri": "urn:nori:singing-voice"
+                }
+            ]
+        }
+    ]
+}

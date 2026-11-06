@@ -4,7 +4,7 @@ const c = @import("c");
 
 pub const MidiSequence = struct {
     allocator: std.mem.Allocator,
-    buf: []align(@alignOf(c.LV2_Atom_Sequence)) u8,
+    buf: []align(8) u8,
     atom_sequence_urid: u32,
     midi_event_urid: u32,
     time_frames_urid: u32,
@@ -16,7 +16,7 @@ pub const MidiSequence = struct {
         midi_event_urid: u32,
         time_frames_urid: u32,
     ) !MidiSequence {
-        const buf = try allocator.alignedAlloc(u8, std.mem.Alignment.of(c.LV2_Atom_Sequence), capacity);
+        const buf = try allocator.alignedAlloc(u8, .@"8", capacity);
         errdefer allocator.free(buf);
 
         var self = MidiSequence{
@@ -48,7 +48,7 @@ pub const MidiSequence = struct {
 
         const body_ptr: *c.LV2_Atom_Sequence_Body =
             @ptrCast(@alignCast(self.buf.ptr + @sizeOf(c.LV2_Atom)));
-        body_ptr.unit = self.time_frames_urid; // URID of time:frames
+        body_ptr.unit = self.time_frames_urid; // 0 means frame timestamps for audio processing.
         body_ptr.pad = 0;
     }
 
@@ -57,6 +57,17 @@ pub const MidiSequence = struct {
             return Error.InvalidMidiSize;
         }
 
+        return self.addTypedEvent(time_frames, self.midi_event_urid, data);
+    }
+
+    pub fn addAtom(self: *MidiSequence, time_frames: i64, data: []const u8) Error!void {
+        if (data.len < @sizeOf(c.LV2_Atom)) return error.InvalidAtomSize;
+        const atom = std.mem.bytesToValue(c.LV2_Atom, data[0..@sizeOf(c.LV2_Atom)]);
+        if (@as(usize, atom.size) != data.len - @sizeOf(c.LV2_Atom)) return error.InvalidAtomSize;
+        return self.addTypedEvent(time_frames, atom.type, data[@sizeOf(c.LV2_Atom)..]);
+    }
+
+    fn addTypedEvent(self: *MidiSequence, time_frames: i64, type_urid: u32, data: []const u8) Error!void {
         const event_body_size: u32 = @intCast(data.len);
 
         const seq_ptr = self.seq();
@@ -83,7 +94,7 @@ pub const MidiSequence = struct {
         var eh = EventHeader{
             .time = time_frames,
             .body_size = event_body_size,
-            .body_type = self.midi_event_urid,
+            .body_type = type_urid,
         };
         @memcpy(p[0..header_sz], std.mem.asBytes(&eh));
         p += header_sz;
@@ -110,6 +121,7 @@ pub const MidiSequence = struct {
     pub const Error = error{
         NoSpace,
         InvalidMidiSize,
+        InvalidAtomSize,
     };
 };
 
@@ -238,4 +250,20 @@ test "MidiSequence signals NoSpace when buffer is full" {
 
     try seq.addEvent(0, &[_]u8{ 0x90, 60, 100 });
     try std.testing.expectError(MidiSequence.Error.NoSpace, seq.addEvent(120, &[_]u8{ 0x80, 60, 0 }));
+}
+
+test "MidiSequence accepts Atom objects alongside MIDI and rejects truncated atoms" {
+    var sequence = try MidiSequence.init(std.testing.allocator, 128, 1, 2, 0);
+    defer sequence.deinit();
+    const object = extern struct { atom: c.LV2_Atom, body: c.LV2_Atom_Object_Body }{
+        .atom = .{ .size = 8, .type = 3 },
+        .body = .{ .id = 0, .otype = 4 },
+    };
+    try sequence.addAtom(0, std.mem.asBytes(&object));
+    try sequence.addEvent(1, &.{ 0x90, 60, 100 });
+    const event = std.mem.bytesToValue(c.LV2_Atom_Event, sequence.buf[16..32]);
+    try std.testing.expectEqual(3, event.body.type);
+    try std.testing.expectEqual(8, event.body.size);
+    try std.testing.expectEqual(0, sequence.seq().body.unit);
+    try std.testing.expectError(error.InvalidAtomSize, sequence.addAtom(0, std.mem.asBytes(&object)[0..12]));
 }

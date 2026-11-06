@@ -64,7 +64,9 @@ pub fn main(init: std.process.Init) !void {
             const plugin_patch_file_name = try patch_mod.get_plugin_patch_file_name(allocator, patch.path, @intCast(i));
             defer allocator.free(plugin_patch_file_name);
             plugin.loadState(io, plugin_patch_file_name) catch |err| {
-                std.debug.print("Failed to load plugin patch {}\n", .{err});
+                if (err != error.FileNotFound) {
+                    std.log.warn("Failed to load plugin state {s}: {s}", .{ plugin_patch_file_name, @errorName(err) });
+                }
             };
 
             channels.appendAssumeCapacity(.{
@@ -101,13 +103,19 @@ pub fn main(init: std.process.Init) !void {
 
         while (true) {
             UiSession.pumpGtkEvents();
+            for (channels.items) |channel| channel.plugin.pumpUI();
 
             if (audio_output.isRunning()) {
                 if ((std.Io.Clock.awake.now(io).toMilliseconds() - last_midi_event_ms.load(.seq_cst)) >= inactivity_timeout_ms) {
                     audio_output.stopAudio();
                 }
             } else {
-                if (midi_input.has_new_events()) {
+                var has_ui_events = false;
+                for (channels.items) |channel| {
+                    has_ui_events = has_ui_events or channel.plugin.ui_requests.hasMessages();
+                }
+                if (midi_input.has_new_events() or has_ui_events) {
+                    last_midi_event_ms.store(std.Io.Clock.awake.now(io).toMilliseconds(), .seq_cst);
                     try audio_output.startAudio(&audio_callback_user_data, audioCallback);
                     continue;
                 }
@@ -160,10 +168,6 @@ fn audioCallback(
     const out: [*]f32 = @ptrCast(@alignCast(output));
     const frame_count_usize: usize = @intCast(frame_count);
 
-    if (frame_count > synth_plugin_mod.max_frames) {
-        std.debug.print("audioCallback got framecount {}\n", .{frame_count});
-    }
-
     const midi_events = data.midi_input.poll();
 
     for (midi_events) |midi_event| {
@@ -174,15 +178,17 @@ fn audioCallback(
 
     for (data.channels) |*channel| {
         routeMidiEvents(data.io, channel, midi_events);
-        channel.plugin.run(@intCast(frame_count));
     }
 
-    mixFrames(
-        out[0..(frame_count_usize * 2)],
-        frame_count_usize,
-        data.channels,
-        data.patch_config.volume,
-    );
+    // PortAudio can supply larger buffers than our plugins' advertised limit.
+    // MIDI belongs to the first chunk and is cleared by SynthPlugin.run().
+    var offset: usize = 0;
+    while (offset < frame_count_usize) {
+        const count = @min(frame_count_usize - offset, synth_plugin_mod.max_frames);
+        for (data.channels) |channel| channel.plugin.run(@intCast(count));
+        mixFrames(out[offset * 2 ..][0 .. count * 2], count, data.channels, data.patch_config.volume);
+        offset += count;
+    }
 
     return audio_output.paContinue;
 }
@@ -217,10 +223,11 @@ fn mixFrames(out: []f32, frame_count: usize, channels: []const Channel, patch_vo
 
     for (channels) |channel| {
         const plugin = channel.plugin;
-        std.debug.assert(plugin.audio_ports.items.len == 2);
+        std.debug.assert(plugin.audio_ports.items.len == 1 or plugin.audio_ports.items.len == 2);
 
         const left_buffer = plugin.audio_out_bufs[plugin.audio_ports.items[0]] orelse unreachable;
-        const right_buffer = plugin.audio_out_bufs[plugin.audio_ports.items[1]] orelse unreachable;
+        const right_port = if (plugin.audio_ports.items.len == 1) plugin.audio_ports.items[0] else plugin.audio_ports.items[1];
+        const right_buffer = plugin.audio_out_bufs[right_port] orelse unreachable;
 
         const gain = channel.config.volume * patch_volume;
 
@@ -268,4 +275,23 @@ fn saveChannelStates(
         defer allocator.free(plugin_patch_file_name);
         try channel.plugin.saveState(plugin_patch_file_name);
     }
+}
+
+test "mixFrames duplicates mono output and preserves stereo with channel and patch gain" {
+    var left = [_]f32{ 1, -0.5 };
+    var right = [_]f32{ 0.25, -1 };
+    var buffers = [_]?[]f32{ &left, &right };
+    var mono_ports = [_]usize{0};
+    var stereo_ports = [_]usize{ 0, 1 };
+    var plugin: SynthPlugin = undefined;
+    plugin.audio_out_bufs = &buffers;
+    plugin.audio_ports = std.ArrayList(usize).fromOwnedSlice(&mono_ports);
+    var config = patch_mod.ChannelConfig{ .volume = 0.5, .plugins = &.{} };
+    const channels = [_]Channel{.{ .midi_channel = 0, .config = &config, .plugin = &plugin }};
+    var output: [4]f32 = undefined;
+    mixFrames(&output, 2, &channels, 0.5);
+    try std.testing.expectEqualSlices(f32, &.{ 0.25, 0.25, -0.125, -0.125 }, &output);
+    plugin.audio_ports = std.ArrayList(usize).fromOwnedSlice(&stereo_ports);
+    mixFrames(&output, 2, &channels, 0.5);
+    try std.testing.expectEqualSlices(f32, &.{ 0.25, 0.0625, -0.125, -0.25 }, &output);
 }

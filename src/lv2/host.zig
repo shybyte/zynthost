@@ -2,13 +2,13 @@ const std = @import("std");
 
 pub const c = @import("c");
 
-// This is not really threadsafe, but probably fine for now.
 const UriTable = std.StringHashMap(c_uint);
 
 pub const Lv2Host = struct {
     allocator: std.mem.Allocator,
     world: *c.LilvWorld,
     uri_table: UriTable,
+    uri_mutex: c.pthread_mutex_t,
     urid_map: c.LV2_URID_Map,
     urid_unmap: c.LV2_URID_Unmap,
     urid_map_feature: c.LV2_Feature,
@@ -41,11 +41,14 @@ pub const Lv2Host = struct {
 
     pub fn deinit(self: *Lv2Host) void {
         self.freeUriTable();
+        _ = c.pthread_mutex_destroy(&self.uri_mutex);
         c.lilv_world_free(self.world);
         self.allocator.destroy(self);
     }
 
     fn mapUriImpl(self: *Lv2Host, uri: [*:0]const u8) c.LV2_URID {
+        _ = c.pthread_mutex_lock(&self.uri_mutex);
+        defer _ = c.pthread_mutex_unlock(&self.uri_mutex);
         const slice = std.mem.span(uri);
         if (self.uri_table.get(slice)) |found| return found;
 
@@ -63,6 +66,8 @@ pub const Lv2Host = struct {
     }
 
     fn unmapUriImpl(self: *Lv2Host, urid: c.LV2_URID) ?[*:0]const u8 {
+        _ = c.pthread_mutex_lock(&self.uri_mutex);
+        defer _ = c.pthread_mutex_unlock(&self.uri_mutex);
         var it = self.uri_table.iterator();
         while (it.next()) |entry| {
             if (entry.value_ptr.* == urid) {
@@ -98,6 +103,7 @@ pub fn initGlobal(allocator: std.mem.Allocator) !*Lv2Host {
         .allocator = allocator,
         .world = undefined,
         .uri_table = UriTable.init(allocator),
+        .uri_mutex = undefined,
         .urid_map = undefined,
         .urid_unmap = undefined,
         .urid_map_feature = undefined,
@@ -106,6 +112,9 @@ pub fn initGlobal(allocator: std.mem.Allocator) !*Lv2Host {
     };
 
     errdefer host.freeUriTable();
+
+    if (c.pthread_mutex_init(&host.uri_mutex, null) != 0) return error.UriMutexInitFailed;
+    errdefer _ = c.pthread_mutex_destroy(&host.uri_mutex);
 
     host.world = c.lilv_world_new() orelse return error.LilvWorldNewFailed;
     errdefer c.lilv_world_free(host.world);
