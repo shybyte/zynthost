@@ -128,13 +128,15 @@ pub fn main(init: std.process.Init) !void {
 
             if (pollProgramChange(&midi_program, &patch_set.value)) break;
 
-            if (!try utils.fileHasInput(stdin_file)) {
+            if (reader.interface.bufferedLen() == 0 and !try utils.fileHasInput(stdin_file)) {
                 try io.sleep(.fromMilliseconds(100), .awake);
                 continue;
             }
 
-            const line = try reader.interface.takeDelimiterExclusive('\n');
-            const command = std.mem.trimEnd(u8, line, "\r\n");
+            const command = try readCommand(&reader.interface) orelse {
+                try io.sleep(.fromMilliseconds(100), .awake);
+                continue;
+            };
             std.debug.print("You entered: \"{s}\"\n", .{command});
 
             if (std.mem.eql(u8, command, "s")) {
@@ -148,6 +150,11 @@ pub fn main(init: std.process.Init) !void {
     }
 
     std.debug.print("Finished.\n", .{});
+}
+
+fn readCommand(reader: *std.Io.Reader) !?[]const u8 {
+    const line = try reader.takeDelimiter('\n') orelse return null;
+    return std.mem.trimEnd(u8, line, "\r");
 }
 
 fn shouldQuitOnUiClose(enabled: bool, channels: []const Channel) bool {
@@ -337,4 +344,12 @@ test "exit on UI close waits for the last UI and respects the option" {
     try std.testing.expect(!shouldQuitOnUiClose(false, &channels));
     try std.testing.expect(!shouldQuitOnUiClose(true, channels[2..]));
     try std.testing.expect(!shouldQuitOnUiClose(true, &.{}));
+}
+
+test "terminal commands consume newlines for repeated saves and quit" {
+    var reader = std.Io.Reader.fixed("s\ns\r\n\nq\n");
+    for ([_][]const u8{ "s", "s", "", "q" }) |expected| {
+        try std.testing.expectEqualStrings(expected, (try readCommand(&reader)).?);
+    }
+    try std.testing.expect(try readCommand(&reader) == null);
 }

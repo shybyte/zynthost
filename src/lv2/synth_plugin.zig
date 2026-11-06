@@ -574,6 +574,40 @@ test "Nori prepares lyrics through the worker, sends notifications, plays mono M
     try std.testing.expect(energy > 0.001);
 }
 
+test "Nori overwrites existing state with each newly applied phrase" {
+    const allocator = std.testing.allocator;
+    const lv2_host = try host.initGlobal(allocator);
+    defer host.deinitGlobal();
+    const plugin = SynthPlugin.init(allocator, lv2_host.worldPtr(), "urn:nori:singing-voice") catch |err| switch (err) {
+        error.PluginNotFound => return error.SkipZigTest,
+        else => return err,
+    };
+    defer plugin.deinit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const state_path = try std.fmt.allocPrintSentinel(allocator, ".zig-cache/tmp/{s}/nori.ttl", .{tmp.sub_path}, 0);
+    defer allocator.free(state_path);
+
+    var buffer: [512]u8 align(8) = undefined;
+    const phrases = [_][:0]const u8{ "Hello world", "Good morning", "Sing again" };
+    for (phrases) |phrase| {
+        const patch = testPatchSet(lv2_host, &buffer, "urn:nori:singing-voice#lyrics", phrase);
+        try std.testing.expect(plugin.ui_requests.push(0, plugin.event_transfer, patch));
+        try waitForTestProperty(plugin, lv2_host, "urn:nori:singing-voice#source", phrase[0 .. phrase.len + 1]);
+        try plugin.saveState(state_path);
+        try plugin.saveState(state_path);
+
+        const saved = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, state_path, allocator, .limited(65536));
+        defer allocator.free(saved);
+        try std.testing.expect(std.mem.indexOf(u8, saved, phrase) != null);
+
+        const restored = try SynthPlugin.init(allocator, lv2_host.worldPtr(), "urn:nori:singing-voice");
+        defer restored.deinit();
+        try restored.loadState(std.testing.io, state_path);
+        try waitForTestProperty(restored, lv2_host, "urn:nori:singing-voice#source", phrase[0 .. phrase.len + 1]);
+    }
+}
+
 fn testPatchSet(lv2_host: *host.Lv2Host, buffer: []u8, key: [:0]const u8, text: []const u8) []const u8 {
     var forge: c.LV2_Atom_Forge = undefined;
     c.lv2_atom_forge_init(&forge, lv2_host.uridMap());
