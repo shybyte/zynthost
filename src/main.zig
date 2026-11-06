@@ -105,6 +105,11 @@ pub fn main(init: std.process.Init) !void {
             UiSession.pumpGtkEvents();
             for (channels.items) |channel| channel.plugin.pumpUI();
 
+            if (shouldQuitOnUiClose(patch_set.value.exit_on_last_ui_closed, channels.items)) {
+                quit = true;
+                break;
+            }
+
             if (audio_output.isRunning()) {
                 if ((std.Io.Clock.awake.now(io).toMilliseconds() - last_midi_event_ms.load(.seq_cst)) >= inactivity_timeout_ms) {
                     audio_output.stopAudio();
@@ -143,6 +148,20 @@ pub fn main(init: std.process.Init) !void {
     }
 
     std.debug.print("Finished.\n", .{});
+}
+
+fn shouldQuitOnUiClose(enabled: bool, channels: []const Channel) bool {
+    if (!enabled) return false;
+
+    var had_ui = false;
+    for (channels) |channel| {
+        if (channel.plugin.session) |*session| {
+            had_ui = true;
+            if (!session.isClosed()) return false;
+        }
+    }
+    // Headless patches and plugins without a UI must keep running.
+    return had_ui;
 }
 
 const AudioCallbackUserData = struct {
@@ -294,4 +313,28 @@ test "mixFrames duplicates mono output and preserves stereo with channel and pat
     plugin.audio_ports = std.ArrayList(usize).fromOwnedSlice(&stereo_ports);
     mixFrames(&output, 2, &channels, 0.5);
     try std.testing.expectEqualSlices(f32, &.{ 0.25, 0.0625, -0.125, -0.25 }, &output);
+}
+
+test "exit on UI close waits for the last UI and respects the option" {
+    var first: SynthPlugin = undefined;
+    first.session = UiSession{};
+    var second: SynthPlugin = undefined;
+    second.session = UiSession{};
+    var headless: SynthPlugin = undefined;
+    headless.session = null;
+    var config = patch_mod.ChannelConfig{ .plugins = &.{} };
+    const channels = [_]Channel{
+        .{ .midi_channel = 0, .config = &config, .plugin = &first },
+        .{ .midi_channel = 1, .config = &config, .plugin = &second },
+        .{ .midi_channel = 2, .config = &config, .plugin = &headless },
+    };
+
+    try std.testing.expect(!shouldQuitOnUiClose(true, &channels));
+    first.session.?.closed.store(true, .release);
+    try std.testing.expect(!shouldQuitOnUiClose(true, &channels));
+    second.session.?.closed.store(true, .release);
+    try std.testing.expect(shouldQuitOnUiClose(true, &channels));
+    try std.testing.expect(!shouldQuitOnUiClose(false, &channels));
+    try std.testing.expect(!shouldQuitOnUiClose(true, channels[2..]));
+    try std.testing.expect(!shouldQuitOnUiClose(true, &.{}));
 }

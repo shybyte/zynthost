@@ -5,6 +5,7 @@ pub const PatchSet = struct {
     patches: []PatchSetEntry,
     dir: ?[]const u8 = null,
     show_ui: ?bool = null,
+    exit_on_last_ui_closed: bool = false,
 
     pub fn load(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !std.json.Parsed(@This()) {
         var parsed_patch_set = try utils.loadJSON(@This(), allocator, io, path);
@@ -153,6 +154,7 @@ test "PatchSet.loadPatch" {
     defer parsed_patch_set.deinit();
 
     try std.testing.expect(patch_set.show_ui == null);
+    try std.testing.expect(!patch_set.exit_on_last_ui_closed);
     // Test loading a valid patch
     const patch = try patch_set.loadPatch(allocator, io, 0);
     defer patch.deinit();
@@ -162,4 +164,10 @@ test "PatchSet.loadPatch" {
     // Test loading a non-existent program
     const result = patch_set.loadPatch(allocator, io, 3);
     try std.testing.expect(result == error.ProgramNotFound);
+}
+
+test "PatchSet loads the exit-on-last-UI option for Nori" {
+    const patch_set = try PatchSet.load(std.testing.allocator, std.testing.io, "patches/demo/nori-patch-set.json");
+    defer patch_set.deinit();
+    try std.testing.expect(patch_set.value.exit_on_last_ui_closed);
 }

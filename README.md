@@ -16,6 +16,13 @@ zig build run -- patches/demo/patch-set.json
 The integration tests require MIDI devices and the Surge XT LV2 plugin. Nori
 integration tests run when its LV2 bundle is discoverable and skip otherwise.
 
+## Closing plugin windows
+
+Set `"exit_on_last_ui_closed": true` in the patch-set JSON to exit the host when
+the last opened plugin UI closes. It defaults to `false`. Headless patches
+(including `"show_ui": false`) keep running. Closing a window does not save state;
+use `s` in the terminal before closing it to save the active phrase.
+
 ## Nori
 
 Build Nori in its own repository and make its `nori.lv2` bundle discoverable
@@ -33,6 +40,8 @@ processor. Lyrics, phoneme edits, reset requests, and status notifications trave
 through queues between the UI and audio threads. Atom buffers honor the plugin's
 minimum buffer sizes. The first run uses Nori's default phrase; press `s` in the
 terminal to save the current phrase and `q` to quit.
+The Nori demo enables `exit_on_last_ui_closed`, so closing its editor also quits
+the host.
 
 ## Hints
 

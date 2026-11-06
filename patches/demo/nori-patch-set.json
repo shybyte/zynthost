@@ -1,4 +1,5 @@
 {
+    "exit_on_last_ui_closed": true,
     "patches": [
         {
             "program": 0,

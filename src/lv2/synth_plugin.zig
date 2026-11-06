@@ -656,6 +656,10 @@ test "Nori GTK3 editor loads lyrics, applies phoneme edits, and resets through t
     c.gtk_button_clicked(@ptrCast(reset_button));
     const reset_cursor: i32 = -1;
     try waitForTestProperty(plugin, lv2_host, "urn:nori:singing-voice#cursor", std.mem.asBytes(&reset_cursor));
+
+    c.gtk_widget_destroy(plugin.session.?.gtk_window.?);
+    UiSession.pumpGtkEvents();
+    try std.testing.expect(plugin.session.?.isClosed());
 }
 
 fn findTestWidget(widget: *c.GtkWidget, name: []const u8, label: ?[]const u8, skip: *usize) ?*c.GtkWidget {
